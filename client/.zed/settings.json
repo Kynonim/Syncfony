@@ -1,0 +1,12 @@
+{
+  "languages": {
+    "Dart": {
+      "format_on_save": "off",
+      "formatter": [],
+      "auto_indent": "preserve_indent",
+      "use_on_type_format": false,
+      "tab_size": 2,
+      "hard_tabs": false
+    }
+  }
+}
