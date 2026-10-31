@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mime/mime.dart';
@@ -176,18 +178,39 @@ class GaleryManagerState extends State<GaleryManager> {
   Widget build(BuildContext context) {
     final isShowProgress = isUploading && uploadTotal > 0;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text("Galery"),
+        title: const Text(
+          "U`Own Media",
+          style: TextStyle(fontWeight: .w600),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(color: Colors.white.withValues(alpha: 0.5)),
+          ),
+        ),
         actions: [
-          Row(
-            children: [
-              const Text("Auto"),
-              Switch(
-                value: isAutoUpload,
-                onChanged: (v) => setState(() => isAutoUpload = v),
-              ),
-            ],
-          )
+          Container(
+            margin: .only(right: 8),
+            padding: .symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.55),
+              borderRadius: .circular(20),
+            ),
+            child: Row(
+              children: [
+                const Text("Auto", style: TextStyle(fontSize: 16)),
+                Switch(
+                  value: isAutoUpload,
+                  onChanged: (v) => setState(() => isAutoUpload = v),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
       body: Column(
