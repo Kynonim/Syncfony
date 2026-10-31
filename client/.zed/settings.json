@@ -3,7 +3,7 @@
     "Dart": {
       "format_on_save": "off",
       "formatter": [],
-      "auto_indent": "preserve_indent",
+      "auto_indent": "syntax_aware",
       "use_on_type_format": false,
       "tab_size": 2,
       "hard_tabs": false
