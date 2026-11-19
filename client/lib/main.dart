@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:syncfony/app_lock.dart';
 import 'package:syncfony/background.dart';
 import 'package:syncfony/l10n.dart';
+import 'package:syncfony/lock_screen.dart';
 import 'package:syncfony/service.dart';
 import 'package:syncfony/uix.dart';
 import 'package:syncfony/widget.dart';
@@ -31,11 +33,100 @@ Future<void> main() async {
     enabled: prefs.getBool(backgroundEnabledPrefsKey) ?? false,
   );
 
-  runApp(const App());
+  runApp(App(
+    initialServerUrl: prefs.getString(serverUrlPrefsKey),
+    initialToken: prefs.getString(serverTokenPrefsKey),
+    initialLockEnabled: prefs.getBool(AppLock.prefsKey) ?? false,
+  ));
 }
 
-class App extends StatelessWidget {
-  const App({super.key});
+class App extends StatefulWidget {
+  final String? initialServerUrl;
+  final String? initialToken;
+  final bool initialLockEnabled;
+
+  const App({
+    super.key,
+    this.initialServerUrl,
+    this.initialToken,
+    this.initialLockEnabled = false,
+  });
+
+  @override
+  State<App> createState() => _AppState();
+}
+
+class _AppState extends State<App> with WidgetsBindingObserver {
+  String? _serverUrl;
+  String? _token;
+  bool _lockEnabled = false;
+  bool _unlocked = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
+    final url = widget.initialServerUrl?.trim() ?? '';
+    final token = widget.initialToken?.trim() ?? '';
+    _serverUrl = url.isEmpty ? null : url;
+    _token = token.isEmpty ? null : token;
+
+    _lockEnabled = widget.initialLockEnabled;
+    _unlocked = !_lockEnabled;
+
+    appLockEnabled.value = _lockEnabled;
+    appLockEnabled.addListener(_onLockSettingChanged);
+  }
+
+  void _onLockSettingChanged() {
+    final enabled = appLockEnabled.value;
+    setState(() {
+      _lockEnabled = enabled;
+      // Saat baru diaktifkan jangan langsung mengunci layar Settings;
+      // kunci berlaku pada resume berikutnya.
+      if (!enabled) _unlocked = true;
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused && _lockEnabled && _unlocked) {
+      setState(() => _unlocked = false);
+    }
+  }
+
+  Future<bool> _unlock() async {
+    final ok = await AppLock.authenticate();
+    if (ok && mounted) setState(() => _unlocked = true);
+    return ok;
+  }
+
+  @override
+  void dispose() {
+    appLockEnabled.removeListener(_onLockSettingChanged);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  void _handleConnected(String url, String token) {
+    setState(() {
+      _serverUrl = url;
+      _token = token.isEmpty ? null : token;
+    });
+  }
+
+  Future<void> _handleDisconnect() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(serverUrlPrefsKey);
+    await prefs.remove(serverTokenPrefsKey);
+    if (!mounted) return;
+    setState(() {
+      _serverUrl = null;
+      _token = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -66,7 +157,23 @@ class App extends StatelessWidget {
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
-          home: const Syncfony(),
+          // Lewati layar welcome bila server sudah pernah dikonfigurasi.
+          home: _serverUrl == null
+              ? Syncfony(onConnected: _handleConnected)
+              : SyncfonyGallery(
+                  serverUrl: _serverUrl!,
+                  token: _token,
+                  onDisconnect: _handleDisconnect,
+                ),
+          // Kunci aplikasi di atas seluruh navigator (termasuk viewer & sheet).
+          builder: (context, child) {
+            return Stack(
+              children: [
+                ?child,
+                if (_lockEnabled && !_unlocked) LockScreen(onUnlock: _unlock),
+              ],
+            );
+          },
           debugShowCheckedModeBanner: false,
         );
       },
@@ -75,7 +182,10 @@ class App extends StatelessWidget {
 }
 
 class Syncfony extends StatefulWidget {
-  const Syncfony({super.key});
+  final void Function(String url, String token)? onConnected;
+
+  const Syncfony({super.key, this.onConnected});
+
   @override
   State<Syncfony> createState() => SyncfonyState();
 }
@@ -122,13 +232,7 @@ class SyncfonyState extends State<Syncfony> {
       await prefs.setString(prefsKey, url);
       await prefs.setString(tokenPrefsKey, token);
       if (!mounted) return;
-      goto(
-        context,
-        SyncfonyGallery(
-          serverUrl: url,
-          token: token.isEmpty ? null : token,
-        ),
-      );
+      widget.onConnected?.call(url, token);
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString();

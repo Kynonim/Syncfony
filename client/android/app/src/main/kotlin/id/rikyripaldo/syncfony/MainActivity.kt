@@ -1,5 +1,6 @@
 package id.rikyripaldo.syncfony
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// FlutterFragmentActivity diperlukan oleh local_auth (biometrik) di Android.
+class MainActivity : FlutterFragmentActivity()

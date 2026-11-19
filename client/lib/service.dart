@@ -64,6 +64,29 @@ class MediaItem {
     return mp >= 1.0 ? "${mp.toStringAsFixed(1)} MP" : "${(mp * 1000).round()} KP";
   }
 
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'hash': hash,
+      'original_name': originalName,
+      'extension': extension,
+      'mimetype': mimetype,
+      'size': [thumbSize, fileSize],
+      'aspect_ratio': [width, height],
+      'has_thumb': hasThumb,
+      'has_live': hasLive,
+      'duration': duration,
+      'device_name': deviceName,
+      'lens': lens,
+      'focal_length': focalLength,
+      'aperture': aperture,
+      'exposure': exposure,
+      'iso': iso,
+      'software': software,
+      'timestamp': timestamp.toUtc().toIso8601String(),
+    };
+  }
+
   factory MediaItem.fromJson(Map<String, dynamic> json) {
     final sizes = (json['size'] as List<dynamic>?) ?? [0, 0];
     final ratio = (json['aspect_ratio'] as List<dynamic>?) ?? [null, null];
@@ -203,11 +226,16 @@ class Api {
     return jsonDecode(body) as Map<String, dynamic>;
   }
 
-  Future<MediaPage> listMedia({int limit = 100, int offset = 0}) async {
-    final uri = Uri.parse("$normalizedUrl/api/assets").replace(queryParameters: {
+  Future<MediaPage> listMedia({int limit = 100, int offset = 0, String? query, String? kind}) async {
+    final params = <String, String>{
       'limit': '$limit',
       'offset': '$offset',
-    });
+    };
+    final trimmed = query?.trim() ?? '';
+    if (trimmed.isNotEmpty) params['q'] = trimmed;
+    if (kind != null && kind.isNotEmpty && kind != 'all') params['kind'] = kind;
+
+    final uri = Uri.parse("$normalizedUrl/api/assets").replace(queryParameters: params);
     final res = await client.get(uri, headers: authHeaders).timeout(const Duration(seconds: 25));
     if (res.statusCode != 200) throw Exception("List failed (${res.statusCode}): ${res.body}");
     return MediaPage.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
@@ -247,6 +275,23 @@ class Api {
     return {
       'scanned': (json['scanned'] as num?)?.toInt() ?? 0,
       'updated': (json['updated'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+  /// Memeriksa file yatim di server (`dryRun=true`) atau menghapusnya.
+  Future<Map<String, int>> reconcile({bool dryRun = true}) async {
+    final uri = Uri.parse("$normalizedUrl/api/maintenance/reconcile")
+        .replace(queryParameters: {'dry_run': '$dryRun'});
+    final res = await client.post(uri, headers: authHeaders).timeout(const Duration(minutes: 5));
+    if (res.statusCode != 200) {
+      throw Exception("Reconcile failed (${res.statusCode}): ${res.body}");
+    }
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    return {
+      'scanned': (json['scanned_files'] as num?)?.toInt() ?? 0,
+      'orphans': (json['orphan_files'] as num?)?.toInt() ?? 0,
+      'missing': (json['missing_files'] as num?)?.toInt() ?? 0,
+      'removed': (json['removed'] as num?)?.toInt() ?? 0,
     };
   }
 

@@ -1,24 +1,34 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:syncfony/app_info.dart';
+import 'package:syncfony/app_lock.dart';
 import 'package:syncfony/background.dart';
+import 'package:syncfony/downloads.dart';
 import 'package:syncfony/l10n.dart';
+import 'package:syncfony/media_thumbnail.dart';
 import 'package:syncfony/service.dart';
 import 'package:syncfony/thumbnail_cache.dart';
+import 'package:syncfony/thumbnail_store.dart';
 import 'package:syncfony/uix.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 class SyncfonyGallery extends StatefulWidget {
   final String serverUrl;
   final String? token;
+  final Future<void> Function()? onDisconnect;
 
   const SyncfonyGallery({
     super.key,
     required this.serverUrl,
     this.token,
+    this.onDisconnect,
   });
 
   static String routeName = "Media";
@@ -62,6 +72,9 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   String? mediaError;
   List<MediaItem> mediaItems = [];
   ServerStats? serverStats;
+  bool offlineMode = false;
+
+  static const String _mediaCacheKey = 'syncfony_media_cache';
 
   static const int _mediaPageSize = 60;
   int _mediaOffset = 0;
@@ -73,6 +86,14 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   final Set<String> selectedLocalIds = {};
   bool backgroundEnabled = false;
   bool isBackfilling = false;
+  bool isReconciling = false;
+
+  String searchQuery = '';
+  String mediaKind = 'all';
+  final TextEditingController filterController = TextEditingController();
+  bool isPrecaching = false;
+  int precacheDone = 0;
+  int precacheTotal = 0;
   String accentId = accentOptions.first.id;
 
   static const String _gridColumnsPrefsKey = gridColumnsPrefsKey;
@@ -191,7 +212,12 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       mediaError = null;
     });
     try {
-      final page = await api.listMedia(limit: _mediaPageSize, offset: 0);
+      final page = await api.listMedia(
+        limit: _mediaPageSize,
+        offset: 0,
+        query: searchQuery,
+        kind: mediaKind,
+      );
       if (!mounted) return;
       setState(() {
         mediaItems = page.items;
@@ -199,13 +225,66 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         hasMoreMedia = page.hasMore;
         mediaTotal = page.total;
         isLoadingMedia = false;
+        offlineMode = false;
       });
+      unawaited(_saveMediaCache());
     } catch (e) {
+      // Offline / server mati: pakai daftar terakhir yang tersimpan.
+      final cached = await _readMediaCache();
       if (!mounted) return;
-      setState(() {
-        mediaError = e.toString();
-        isLoadingMedia = false;
-      });
+      if (cached != null) {
+        setState(() {
+          mediaItems = cached;
+          _mediaOffset = cached.length;
+          hasMoreMedia = false;
+          isLoadingMedia = false;
+          mediaError = null;
+          offlineMode = true;
+        });
+      } else {
+        setState(() {
+          mediaError = e.toString();
+          isLoadingMedia = false;
+          offlineMode = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveMediaCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _mediaCacheKey,
+        jsonEncode({
+          'server': api.normalizedUrl,
+          'items': mediaItems.map((item) => item.toJson()).toList(),
+          'total': mediaTotal,
+          'saved_at': DateTime.now().toIso8601String(),
+        }),
+      );
+    } catch (_) {
+      // Cache opsional: gagal menyimpan tidak boleh mengganggu UI.
+    }
+  }
+
+  Future<List<MediaItem>?> _readMediaCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_mediaCacheKey);
+      if (raw == null || raw.isEmpty) return null;
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      // Jangan tampilkan cache dari server lain.
+      if (json['server'] != null && json['server'].toString() != api.normalizedUrl) {
+        return null;
+      }
+      final items = (json['items'] as List<dynamic>?) ?? const [];
+      final list = items
+          .map((entry) => MediaItem.fromJson(entry as Map<String, dynamic>))
+          .toList();
+      return list.isEmpty ? null : list;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -213,7 +292,12 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     if (isLoadingMoreMedia || !hasMoreMedia) return;
     setState(() => isLoadingMoreMedia = true);
     try {
-      final page = await api.listMedia(limit: _mediaPageSize, offset: _mediaOffset);
+      final page = await api.listMedia(
+        limit: _mediaPageSize,
+        offset: _mediaOffset,
+        query: searchQuery,
+        kind: mediaKind,
+      );
       if (!mounted) return;
       setState(() {
         mediaItems = [...mediaItems, ...page.items];
@@ -222,6 +306,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         if (page.total != null) mediaTotal = page.total;
         isLoadingMoreMedia = false;
       });
+      unawaited(_saveMediaCache());
     } catch (_) {
       if (!mounted) return;
       setState(() => isLoadingMoreMedia = false);
@@ -279,9 +364,247 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     }
   }
 
+  /// Mengunduh semua thumbnail ke cache disk agar galeri tetap tampil offline.
+  Future<void> _precacheThumbnails() async {
+    if (isPrecaching) return;
+    setState(() {
+      isPrecaching = true;
+      precacheDone = 0;
+      precacheTotal = 0;
+    });
+
+    var offset = 0;
+    try {
+      while (true) {
+        final page = await api.listMedia(limit: 100, offset: offset);
+        if (page.items.isEmpty) break;
+
+        if (mounted) setState(() => precacheTotal += page.items.length);
+
+        for (final item in page.items) {
+          try {
+            if (ThumbnailCache.get(item.id) == null &&
+                await ThumbnailStore.read(item.id) == null) {
+              final url = item.hasThumb ? api.getThumbUrl(item.id) : api.getFileUrl(item.id);
+              final res = await api.client
+                  .get(Uri.parse(url), headers: api.authHeaders)
+                  .timeout(const Duration(seconds: 20));
+              if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+                ThumbnailCache.put(item.id, res.bodyBytes);
+                await ThumbnailStore.write(item.id, res.bodyBytes);
+              }
+            }
+          } catch (_) {
+            // Lanjut ke item berikutnya; yang gagal akan dicoba lagi nanti.
+          }
+          if (mounted) setState(() => precacheDone += 1);
+        }
+
+        if (!page.hasMore) break;
+        offset += page.items.length;
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('server.precacheDone', args: {'count': '$precacheDone'}))),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(t('viewer.downloadFailed', args: {'error': '$e'})),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => isPrecaching = false);
+    }
+  }
+
+  Future<void> _checkOrphans() async {
+    if (isReconciling) return;
+    setState(() => isReconciling = true);
+    try {
+      final report = await api.reconcile();
+      if (!mounted) return;
+
+      final orphans = report['orphans'] ?? 0;
+      final missing = report['missing'] ?? 0;
+      final scanned = report['scanned'] ?? 0;
+
+      if (orphans == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(t('server.reconcileClean', args: {
+              'scanned': '$scanned',
+              'missing': '$missing',
+            })),
+          ),
+        );
+        return;
+      }
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(t('server.reconcileFoundTitle', args: {'orphans': '$orphans'})),
+          content: Text(t('server.reconcileFoundBody', args: {
+            'scanned': '$scanned',
+            'missing': '$missing',
+          })),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(t('action.cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(t('action.delete')),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      final result = await api.reconcile(dryRun: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(t('server.reconcileDeleted', args: {
+            'removed': '${result['removed'] ?? 0}',
+          })),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(t('server.reconcileFailed', args: {'error': '$e'})),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => isReconciling = false);
+    }
+  }
+
+  Future<void> _showFilterSheet() async {
+    filterController.text = searchQuery;
+    var selectedKind = mediaKind;
+
+    final applied = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.35),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: StatefulBuilder(
+            builder: (ctx, setSheetState) {
+              return SafeArea(
+                child: GlassSurface(
+                  radius: 30,
+                  blur: 34,
+                  opacity: 0.86,
+                  margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        t('filter.title'),
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: filterController,
+                        autofocus: true,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: (_) => Navigator.pop(ctx, true),
+                        decoration: InputDecoration(
+                          labelText: t('filter.name'),
+                          hintText: t('filter.nameHint'),
+                          prefixIcon: const Icon(Icons.search_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      SegmentedButton<String>(
+                        segments: [
+                          ButtonSegment(value: 'all', label: Text(t('filter.all'))),
+                          ButtonSegment(
+                            value: 'image',
+                            icon: const Icon(Icons.image_rounded, size: 16),
+                            label: Text(t('filter.images')),
+                          ),
+                          ButtonSegment(
+                            value: 'video',
+                            icon: const Icon(Icons.videocam_rounded, size: 16),
+                            label: Text(t('filter.videos')),
+                          ),
+                        ],
+                        selected: {selectedKind},
+                        showSelectedIcon: false,
+                        onSelectionChanged: (values) {
+                          setSheetState(() => selectedKind = values.first);
+                        },
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: Text(t('action.cancel')),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: Text(t('filter.apply')),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+
+    if (applied != true) return;
+
+    setState(() {
+      searchQuery = filterController.text.trim();
+      mediaKind = selectedKind;
+    });
+    await _fetchMedia();
+  }
+
+  Future<void> _clearFilter() async {
+    filterController.clear();
+    setState(() {
+      searchQuery = '';
+      mediaKind = 'all';
+    });
+    await _fetchMedia();
+  }
+
   Future<void> _deleteMedia(MediaItem item) async {
     try {
       await api.deleteMedia(item.id);
+      await ThumbnailStore.delete(item.id);
+      ThumbnailCache.remove(item.id);
       if (!mounted) return;
       setState(() {
         mediaItems.removeWhere((m) => m.id == item.id);
@@ -389,6 +712,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     settingsScroll.dispose();
     navbarVisible.dispose();
     gridColumnsNotifier.dispose();
+    filterController.dispose();
     urlEditController.dispose();
     tokenEditController.dispose();
     super.dispose();
@@ -611,11 +935,65 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
             SliverPadding(
               padding: EdgeInsets.only(top: topPad + 4, left: 16, right: 16, bottom: 8),
               sliver: SliverToBoxAdapter(
-                child: Text(
-                  mediaTotal != null
-                      ? t('media.count', args: {'count': '$mediaTotal'})
-                      : t('media.countShort', args: {'count': '${mediaItems.length}'}),
-                  style: Theme.of(context).textTheme.bodySmall,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        mediaTotal != null
+                            ? t('media.count', args: {'count': '$mediaTotal'})
+                            : t('media.countShort', args: {'count': '${mediaItems.length}'}),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    if (offlineMode)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          t('media.offline'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    if (searchQuery.isNotEmpty || mediaKind != 'all') ...[
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: _clearFilter,
+                        child: GlassSurface(
+                          radius: 10,
+                          blur: 12,
+                          opacity: 0.5,
+                          shadow: false,
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: Row(
+                            mainAxisSize: .min,
+                            children: [
+                              const Icon(Icons.filter_alt_off_rounded, size: 13),
+                              const SizedBox(width: 4),
+                              Text(
+                                t('filter.clear'),
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 6),
+                    GlassIconButton(
+                      icon: Icons.tune_rounded,
+                      size: 32,
+                      iconSize: 17,
+                      onPressed: _showFilterSheet,
+                      tooltip: t('filter.title'),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1190,6 +1568,34 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         GlassCard(
           child: Column(
             children: [
+              ValueListenableBuilder<bool>(
+                valueListenable: appLockEnabled,
+                builder: (context, locked, _) {
+                  return SwitchListTile(
+                    secondary: const Icon(Icons.lock_outline_rounded),
+                    title: Text(t('lock.title')),
+                    subtitle: Text(t('lock.subtitle')),
+                    value: locked,
+                    onChanged: (value) async {
+                      final messenger = ScaffoldMessenger.of(this.context);
+                      if (value) {
+                        final ok = await AppLock.authenticate();
+                        if (!ok) {
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            SnackBar(content: Text(t('lock.unavailable'))),
+                          );
+                          return;
+                        }
+                      }
+                      await AppLock.setEnabled(value);
+                      appLockEnabled.value = value;
+                      if (mounted) setState(() {});
+                    },
+                  );
+                },
+              ),
+              const Divider(height: 1),
               SwitchListTile(
                 secondary: const Icon(Icons.sync_rounded),
                 title: Text(t('server.background')),
@@ -1222,6 +1628,47 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
               ),
               const Divider(height: 1),
               ListTile(
+                leading: const Icon(Icons.plumbing_rounded),
+                title: Text(t('server.reconcile')),
+                subtitle: Text(t('server.reconcileSubtitle')),
+                trailing: isReconciling
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : null,
+                onTap: isReconciling ? null : _checkOrphans,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.cloud_download_rounded),
+                title: Text(t('server.precacheThumbs')),
+                subtitle: Text(
+                  isPrecaching
+                      ? t('server.precacheProgress', args: {
+                          'done': '$precacheDone',
+                          'total': '$precacheTotal',
+                        })
+                      : t('server.precacheThumbsSubtitle'),
+                ),
+                trailing: isPrecaching
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : null,
+                onTap: isPrecaching ? null : _precacheThumbnails,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.photo_size_select_small_rounded),
+                title: Text(t('server.clearThumbs')),
+                subtitle: Text(t('server.clearThumbsSubtitle')),
+                onTap: () async {
+                  await ThumbnailStore.clear();
+                  ThumbnailCache.clear();
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(t('server.clearThumbsDone'))),
+                  );
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
                 leading: const Icon(Icons.cleaning_services_rounded),
                 title: Text(t('server.resetCache')),
                 subtitle: Text(t('server.resetCacheSubtitle')),
@@ -1240,12 +1687,93 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                   t('server.disconnect'),
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
-                onTap: () => goback(context),
+                onTap: () async {
+                  await widget.onDisconnect?.call();
+                },
               ),
             ],
           ),
         ),
+        const SizedBox(height: 12),
+        _buildAboutCard(),
       ],
+    );
+  }
+
+  Widget _buildAboutCard() {
+    final scheme = Theme.of(context).colorScheme;
+    return GlassCard(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              t('about.title'),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: const AppLogo(size: 46),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: .start,
+                    children: [
+                      Text(
+                        AppInfo.name,
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, letterSpacing: -0.3),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        t('about.version', args: {'version': AppInfo.version}),
+                        style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              AppInfo.tagline,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const Divider(height: 22),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.code_rounded),
+              title: Text(t('about.sourceCode')),
+              subtitle: Text(
+                AppInfo.repository.replaceFirst('https://', ''),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.open_in_new_rounded, size: 18),
+              onTap: _openRepository,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openRepository() async {
+    final uri = Uri.parse(AppInfo.repository);
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (opened) return;
+    } catch (_) {}
+
+    if (!mounted) return;
+    await Clipboard.setData(ClipboardData(text: AppInfo.repository));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(t('about.linkCopied'))),
     );
   }
 
@@ -1501,15 +2029,15 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   }
 
   Widget _buildMediaTile(MediaItem item) {
-    final thumbUrl = item.hasThumb ? api.getThumbUrl(item.id) : api.getFileUrl(item.id);
     return GestureDetector(
       onTap: () {
         goto(
           context,
           MediaViewerPage(
-            item: item,
+            items: mediaItems,
+            initialIndex: mediaItems.indexWhere((m) => m.id == item.id),
             api: api,
-            onDelete: () => _deleteMedia(item),
+            onDelete: _deleteMedia,
           ),
         );
       },
@@ -1520,19 +2048,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
           children: [
             Container(
               color: Theme.of(context).colorScheme.surfaceContainerHigh.withValues(alpha: 0.35),
-              child: Image.network(
-                thumbUrl,
-                headers: api.authHeaders,
-                fit: .cover,
-                cacheWidth: 400,
-                errorBuilder: (context, error, stackTrace) => Container(
-                  color: Colors.white10,
-                  child: Icon(
-                    item.isVideo ? Icons.videocam_outlined : Icons.image_outlined,
-                    color: Colors.white24,
-                  ),
-                ),
-              ),
+              child: MediaThumbnail(item: item, api: api),
             ),
             if (!item.isVideo && item.hasLive)
               Positioned(
@@ -2208,13 +2724,15 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
 }
 
 class MediaViewerPage extends StatefulWidget {
-  final MediaItem item;
+  final List<MediaItem> items;
+  final int initialIndex;
   final Api api;
-  final Future<void> Function() onDelete;
+  final Future<void> Function(MediaItem item) onDelete;
 
   const MediaViewerPage({
     super.key,
-    required this.item,
+    required this.items,
+    required this.initialIndex,
     required this.api,
     required this.onDelete,
   });
@@ -2224,11 +2742,19 @@ class MediaViewerPage extends StatefulWidget {
 }
 
 class _MediaViewerPageState extends State<MediaViewerPage> {
+  late final PageController _pageController;
+  late List<MediaItem> _items;
+  late int _index;
+
+  MediaItem get _item => _items[_index];
+
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
   bool _isVideoError = false;
   bool _isMuted = false;
   bool _showControls = true;
+  bool _downloading = false;
+  double _downloadProgress = 0;
 
   VideoPlayerController? _liveController;
   bool _isPlayingLive = false;
@@ -2237,19 +2763,56 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
   @override
   void initState() {
     super.initState();
-    if (widget.item.isVideo) {
+    _items = List.of(widget.items);
+    _index = widget.items.isEmpty
+        ? 0
+        : widget.initialIndex.clamp(0, widget.items.length - 1);
+    _pageController = PageController(initialPage: _index);
+    if (_items.isNotEmpty && _item.isVideo) {
       _initVideo();
     }
   }
 
+  Future<void> _onPageChanged(int index) async {
+    setState(() => _index = index);
+    await _resetPlayback();
+    if (_item.isVideo) {
+      await _initVideo();
+    }
+  }
+
+  Future<void> _resetPlayback() async {
+    // Nullkan referensi lebih dulu agar frame berikutnya tidak memakai
+    // controller lama yang sedang dibuang.
+    final video = _videoController;
+    final live = _liveController;
+    _videoController = null;
+    _liveController = null;
+    _isVideoInitialized = false;
+    _isVideoError = false;
+    _isPlayingLive = false;
+    _isLoadingLive = false;
+    _showControls = true;
+
+    await video?.pause();
+    video?.dispose();
+    await live?.pause();
+    live?.dispose();
+  }
+
   Future<void> _initVideo() async {
     final controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.api.getFileUrl(widget.item.id)),
+      Uri.parse(widget.api.getFileUrl(_item.id)),
       httpHeaders: widget.api.authHeaders,
     );
     _videoController = controller;
     try {
       await controller.initialize();
+      // Pengguna bisa menggeser ke item lain sebelum video siap.
+      if (!mounted || _videoController != controller) {
+        await controller.dispose();
+        return;
+      }
       controller.addListener(() {
         if (mounted) setState(() {});
       });
@@ -2258,18 +2821,48 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
         setState(() => _isVideoInitialized = true);
       }
     } catch (_) {
-      if (mounted) {
-        setState(() => _isVideoError = true);
-      }
+      if (!mounted || _videoController != controller) return;
+      setState(() => _isVideoError = true);
+    }
+  }
+
+  Future<void> _downloadOriginal() async {
+    if (_downloading) return;
+    setState(() {
+      _downloading = true;
+      _downloadProgress = 0;
+    });
+    try {
+      final file = await downloadOriginal(
+        widget.api,
+        _item,
+        onProgress: (progress) {
+          if (mounted) setState(() => _downloadProgress = progress);
+        },
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('viewer.downloadDone', args: {'path': file.path}))),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(t('viewer.downloadFailed', args: {'error': '$e'})),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _downloading = false);
     }
   }
 
   Future<void> _playLivePhoto() async {
-    if (!widget.item.hasLive || _isPlayingLive || _isLoadingLive) return;
+    if (!_item.hasLive || _isPlayingLive || _isLoadingLive) return;
     setState(() => _isLoadingLive = true);
     try {
       _liveController ??= VideoPlayerController.networkUrl(
-        Uri.parse(widget.api.getLiveUrl(widget.item.id)),
+        Uri.parse(widget.api.getLiveUrl(_item.id)),
         httpHeaders: widget.api.authHeaders,
       );
       if (!_liveController!.value.isInitialized) {
@@ -2316,6 +2909,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
   void dispose() {
     _videoController?.dispose();
     _liveController?.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -2348,7 +2942,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
   }
 
   void _showIphoneInfoSheet() {
-    final item = widget.item;
+    final item = _item;
     final extBadge = item.extension.toUpperCase();
     final resBadge = _resolutionBadge(item);
 
@@ -2547,7 +3141,10 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final item = widget.item;
+    if (_items.isEmpty) {
+      return const Scaffold(backgroundColor: Colors.black);
+    }
+    final item = _item;
     return Scaffold(
       backgroundColor: Colors.black,
       extendBodyBehindAppBar: true,
@@ -2578,13 +3175,28 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
             onPressed: _showIphoneInfoSheet,
           ),
           IconButton(
+            tooltip: t('viewer.download'),
+            icon: _downloading
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                      value: _downloadProgress > 0 ? _downloadProgress : null,
+                    ),
+                  )
+                : const Icon(Icons.download_rounded),
+            onPressed: _downloading ? null : _downloadOriginal,
+          ),
+          IconButton(
             icon: const Icon(Icons.delete_outline_rounded),
             onPressed: () async {
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
                   title: Text(t('viewer.deleteTitle')),
-                  content: const Text("File ini akan dihapus permanen dari server."),
+                  content: Text(t('viewer.deleteBody')),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('action.cancel'))),
                     FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(t('action.delete'))),
@@ -2592,8 +3204,9 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
                 ),
               );
               if (confirmed == true) {
-                await widget.onDelete();
-                if (context.mounted) Navigator.pop(context);
+                await widget.onDelete(item);
+                if (!context.mounted) return;
+                await _removeCurrentItem();
               }
             },
           ),
@@ -2605,9 +3218,57 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
             _showIphoneInfoSheet();
           }
         },
-        child: item.isVideo ? _buildVideoBody() : _buildPhotoBody(),
+        child: PageView.builder(
+          controller: _pageController,
+          itemCount: _items.length,
+          onPageChanged: _onPageChanged,
+          itemBuilder: (context, index) {
+            if (index != _index) {
+              return _buildInactivePage(_items[index]);
+            }
+            return item.isVideo ? _buildVideoBody() : _buildPhotoBody();
+          },
+        ),
       ),
     );
+  }
+
+  Widget _buildInactivePage(MediaItem item) {
+    if (item.isVideo) {
+      return Center(
+        child: MediaThumbnail(item: item, api: widget.api, fit: BoxFit.contain),
+      );
+    }
+    return Center(
+      child: Image.network(
+        widget.api.getFileUrl(item.id),
+        headers: widget.api.authHeaders,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) =>
+            MediaThumbnail(item: item, api: widget.api, fit: BoxFit.contain),
+      ),
+    );
+  }
+
+  Future<void> _removeCurrentItem() async {
+    final removedAt = _index;
+    setState(() {
+      _items.removeAt(removedAt);
+      if (_items.isNotEmpty) {
+        _index = removedAt.clamp(0, _items.length - 1);
+      }
+    });
+
+    if (_items.isEmpty) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+
+    _pageController.jumpToPage(_index);
+    await _resetPlayback();
+    if (_item.isVideo) {
+      await _initVideo();
+    }
   }
 
   Widget _buildVideoBody() {
@@ -2637,10 +3298,10 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
       return Stack(
         alignment: Alignment.center,
         children: [
-          if (widget.item.hasThumb)
-            Image.network(
-              widget.api.getThumbUrl(widget.item.id),
-              headers: widget.api.authHeaders,
+          if (_item.hasThumb)
+            MediaThumbnail(
+              item: _item,
+              api: widget.api,
               fit: BoxFit.contain,
             ),
           const CircularProgressIndicator(color: Colors.white),
@@ -2733,7 +3394,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
   }
 
   Widget _buildPhotoBody() {
-    final item = widget.item;
+    final item = _item;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -2759,6 +3420,12 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
                         if (progress == null) return child;
                         return const Center(child: CircularProgressIndicator());
                       },
+                      // Offline: tampilkan thumbnail yang tersimpan di cache.
+                      errorBuilder: (context, error, stackTrace) => MediaThumbnail(
+                        item: item,
+                        api: widget.api,
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
           ),

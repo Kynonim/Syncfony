@@ -69,6 +69,15 @@ Future<void> configureBackgroundBackup({required bool enabled}) async {
       initialDelay: const Duration(minutes: 5),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
       constraints: Constraints(networkType: NetworkType.connected),
+      // Android: jalankan sebagai foreground service agar upload panjang tidak
+      // dibunuh OS. Diabaikan di iOS.
+      foregroundServiceConfig: ForegroundServiceConfig(
+        notificationTitle: 'Syncfony',
+        notificationText: 'Mencadangkan media ke server...',
+        notificationChannelId: 'syncfony_backup',
+        notificationChannelName: 'Backup',
+        foregroundServiceType: ForegroundServiceType.dataSync,
+      ),
     );
   } catch (error) {
     // Simulator iOS / perangkat tanpa dukungan background akan masuk ke sini.

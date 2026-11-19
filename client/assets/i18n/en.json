@@ -19,6 +19,7 @@
   "media.count": "{count} media on the server",
   "media.countShort": "{count} media",
   "media.loadMore": "Load more",
+  "media.offline": "Offline · cached data",
 
   "local.permission.title": "Gallery access required",
   "local.permission.subtitle": "Syncfony only reads photos & videos on this device to upload them to your own server.",
@@ -88,6 +89,27 @@
   "server.resetCacheDone": "Local backup cache cleared",
   "server.disconnect": "Disconnect Server",
 
+  "viewer.download": "Download original",
+  "viewer.downloadDone": "Saved to {path}",
+  "viewer.downloadFailed": "Download failed: {error}",
+
+  "server.reconcile": "Find Orphan Files",
+  "server.reconcileSubtitle": "Detect files on disk that have no database record",
+  "server.reconcileClean": "Clean: {scanned} files scanned, {missing} records without files",
+  "server.reconcileFoundTitle": "{orphans} orphan files found",
+  "server.reconcileFoundBody": "{scanned} files scanned, {missing} database records have no file. Delete the orphan files from disk?",
+  "server.reconcileDeleted": "{removed} orphan files deleted",
+  "server.reconcileFailed": "Check failed: {error}",
+
+  "server.precacheThumbs": "Cache Thumbnails for Offline",
+  "server.precacheThumbsSubtitle": "Download every thumbnail so the gallery still works without a network",
+  "server.precacheProgress": "Downloading thumbnails... {done}/{total}",
+  "server.precacheDone": "{count} thumbnails saved for offline use",
+
+  "server.clearThumbs": "Clear Thumbnail Cache",
+  "server.clearThumbsSubtitle": "Remove offline thumbnails stored on this device",
+  "server.clearThumbsDone": "Thumbnail cache cleared",
+
   "viewer.deleteTitle": "Delete Media?",
   "viewer.deleteBody": "This file will be permanently removed from the server.",
   "viewer.deleted": "Media deleted from the server",
@@ -122,6 +144,27 @@
 
   "date.months": "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec",
   "date.days": "Mon,Tue,Wed,Thu,Fri,Sat,Sun",
+
+  "about.title": "About",
+  "about.version": "Version {version}",
+  "about.sourceCode": "Source Code (GitHub)",
+  "about.linkCopied": "Link copied to clipboard",
+
+  "filter.title": "Search & Filter",
+  "filter.name": "File name",
+  "filter.nameHint": "e.g. IMG_2024",
+  "filter.all": "All",
+  "filter.images": "Photos",
+  "filter.videos": "Videos",
+  "filter.apply": "Apply",
+  "filter.clear": "Clear filter",
+
+  "lock.title": "App Lock",
+  "lock.subtitle": "Require device biometrics/PIN when the app opens",
+  "lock.prompt": "Unlock to continue",
+  "lock.unlock": "Unlock with Biometrics",
+  "lock.failed": "Unlock failed. Try again.",
+  "lock.unavailable": "Authentication is not available on this device",
 
   "welcome.tagline": "Self-hosted Media Backup",
 

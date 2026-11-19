@@ -77,12 +77,18 @@
 	<string>Syncfony perlu menyimpan media dari server ke galeri bila Anda mengunduhnya.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.syncfony.backup</string>
+		<string>id.rikyripaldo.syncfony.backup</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
 		<string>processing</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Gunakan Face ID untuk membuka aplikasi Syncfony.</string>
 </dict>
 </plist>

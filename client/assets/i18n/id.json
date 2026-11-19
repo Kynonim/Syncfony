@@ -19,6 +19,7 @@
   "media.count": "{count} media di server",
   "media.countShort": "{count} media",
   "media.loadMore": "Muat lebih banyak",
+  "media.offline": "Offline · data tersimpan",
 
   "local.permission.title": "Akses galeri diperlukan",
   "local.permission.subtitle": "Syncfony hanya membaca foto & video di perangkat ini untuk diunggah ke server Anda sendiri.",
@@ -88,6 +89,27 @@
   "server.resetCacheDone": "Cache backup lokal dibersihkan",
   "server.disconnect": "Putuskan Server",
 
+  "viewer.download": "Unduh file asli",
+  "viewer.downloadDone": "Tersimpan di {path}",
+  "viewer.downloadFailed": "Gagal mengunduh: {error}",
+
+  "server.reconcile": "Periksa File Yatim",
+  "server.reconcileSubtitle": "Deteksi file di disk yang tidak punya data di database",
+  "server.reconcileClean": "Bersih: {scanned} file diperiksa, {missing} baris tanpa file",
+  "server.reconcileFoundTitle": "{orphans} file yatim ditemukan",
+  "server.reconcileFoundBody": "{scanned} file dipindai, {missing} baris database tidak menemukan filenya. Hapus file yatim dari disk?",
+  "server.reconcileDeleted": "{removed} file yatim dihapus",
+  "server.reconcileFailed": "Pemeriksaan gagal: {error}",
+
+  "server.precacheThumbs": "Unduh Thumbnail untuk Offline",
+  "server.precacheThumbsSubtitle": "Simpan semua thumbnail agar galeri tetap tampil tanpa jaringan",
+  "server.precacheProgress": "Mengunduh thumbnail... {done}/{total}",
+  "server.precacheDone": "{count} thumbnail disimpan untuk offline",
+
+  "server.clearThumbs": "Bersihkan Cache Thumbnail",
+  "server.clearThumbsSubtitle": "Hapus thumbnail offline yang tersimpan di perangkat",
+  "server.clearThumbsDone": "Cache thumbnail dibersihkan",
+
   "viewer.deleteTitle": "Hapus Media?",
   "viewer.deleteBody": "File ini akan dihapus permanen dari server.",
   "viewer.deleted": "Media dihapus dari server",
@@ -122,6 +144,27 @@
 
   "date.months": "Jan,Feb,Mar,Apr,Mei,Jun,Jul,Agu,Sep,Okt,Nov,Des",
   "date.days": "Sen,Sel,Rab,Kam,Jum,Sab,Min",
+
+  "about.title": "Tentang",
+  "about.version": "Versi {version}",
+  "about.sourceCode": "Kode Sumber (GitHub)",
+  "about.linkCopied": "Tautan disalin ke clipboard",
+
+  "filter.title": "Cari & Filter",
+  "filter.name": "Nama file",
+  "filter.nameHint": "mis. IMG_2024",
+  "filter.all": "Semua",
+  "filter.images": "Foto",
+  "filter.videos": "Video",
+  "filter.apply": "Terapkan",
+  "filter.clear": "Hapus filter",
+
+  "lock.title": "Kunci Aplikasi",
+  "lock.subtitle": "Minta biometrik/PIN perangkat saat aplikasi dibuka",
+  "lock.prompt": "Buka kunci untuk melanjutkan",
+  "lock.unlock": "Buka dengan Biometrik",
+  "lock.failed": "Gagal membuka kunci. Coba lagi.",
+  "lock.unavailable": "Autentikasi tidak tersedia di perangkat ini",
 
   "welcome.tagline": "Self-hosted Media Backup",
 

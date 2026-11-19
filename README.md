@@ -10,17 +10,24 @@
 - **Logo Ikut Warna Aksen:** Logo di-tint otomatis dengan `BlendMode.color` sehingga hue-nya mengikuti aksen aktif tanpa kehilangan detail line art (ikon peluncur OS tetap statis).
 - **Multi-bahasa Berbasis File:** Semua teks UI dibaca dari `assets/i18n/<kode>.json`; menambah bahasa baru cukup dengan menambah satu file JSON + satu entri di `index.json` (tanpa mengubah kode Dart).
 - **Tampilan yang Bisa Diatur:** Warna aksen (8 pilihan: hijau, biru, teal, ungu, pink, oranye, merah, grafit), intensitas blur kaca 0–200% (0% mematikan blur untuk menghemat GPU), dan jumlah kolom galeri 2–8 — bisa lewat **Settings** maupun **cubit dua jari** langsung di galeri (dengan indikator kolom sementara).
+- **Pencarian & Filter:** Cari media berdasarkan nama file dan filter jenis (semua/foto/video) langsung dari server, sehingga tetap efisien untuk library besar. Tombol filter ada di tab Media dengan penanda filter aktif.
+- **Kunci Aplikasi:** Opsional di Settings — meminta biometrik/PIN perangkat (Face ID/Touch ID/fingerprint) saat aplikasi dibuka atau kembali dari latar belakang. Kunci menutupi seluruh UI termasuk viewer.
 - **Empat Tab Navigasi:** **Media** (galeri server), **Lokal** (foto/video di perangkat), **Backup** (status & antrean), dan **Settings**.
-- **Backup Background:** Tugas periodik (WorkManager) berjalan ±30 menit sekali, termasuk saat aplikasi ditutup, dengan batas 200 item per siklus. Dapat diaktifkan di Settings.
+- **Backup Background:** Tugas periodik (WorkManager) berjalan ±30 menit sekali, termasuk saat aplikasi ditutup, dengan batas 200 item per siklus. Di Android tugas dijalankan sebagai **foreground service** (`dataSync`) beserta notifikasi agar tidak dibunuh OS. Dapat diaktifkan di Settings.
 - **Backup & Antrean Otomatis:** Memindai galeri perangkat menggunakan `photo_manager` (hingga 5000 aset per pemindaian) dan mengunggah foto/video secara bertahap dengan kontrol **Play / Pause**, retry otomatis (3 percobaan), serta indikator progress.
 - **Backup Selektif:** Tab **Lokal** menampilkan seluruh foto/video perangkat dengan penanda cloud untuk yang sudah ada di server; tekan lama untuk memilih beberapa item lalu unggah sekaligus.
 - **Status Backup Terverifikasi Server:** Indeks lokal menyimpan pasangan `assetId → SHA-256` dan dicocokkan ulang dengan daftar hash server setiap kali tab dibuka. Jika database/file di server dihapus langsung, hitungan backup otomatis kembali ke 0.
 - **Deduplikasi SHA-256 Berbasis Hash:** Sebelum upload, client menghitung SHA-256 (streaming, hemat memori) dan mencocokkannya dengan indeks hash server, sehingga file yang sudah ada tidak diunggah ulang meskipun cache lokal hilang atau aplikasi dipasang ulang.
+- **Perawatan Data:** Saat server start, file sementara (`.tmp`) sisa crash dibersihkan. Menu **Periksa File Yatim** di aplikasi menjalankan rekonsiliasi disk vs database (dry-run dulu, lalu opsi hapus).
 - **Upload Streaming di Server:** File multipart ditulis bertahap ke disk sambil dihitung hash-nya, sehingga video besar tidak menahan seluruh isi di RAM.
 - **Dukungan Format Luas:** Mendukung gambar standar (JPEG, PNG, WebP, GIF), **HEIC/HEIF**, video (MP4, MOV, MKV, WebM), serta **Live Photo** (foto + klip `.mov` pendamping).
 - **Thumbnail Otomatis:** Pembuatan thumbnail gambar dan frame video otomatis di server menggunakan `image`, `heif-rs`, dan `ffmpeg`.
 - **Galeri & Media Viewer:**
+  - Thumbnail di-cache di memori + disk, sehingga galeri server tetap tampil saat perangkat **offline** untuk item yang sudah pernah dimuat. Aksi **Unduh Thumbnail untuk Offline** menyiapkan seluruh galeri sekaligus.
+  - Tombol **Unduh** di viewer menyimpan file asli ke folder `Syncfony` di perangkat.
+  - Gambar dibuka dalam resolusi asli (fallback ke thumbnail tersimpan saat offline); video di-stream langsung dari server.
   - Pengelompokan media berdasarkan tanggal (`Today`, `Yesterday`, `dd/MM/yyyy`) dengan **pagination / infinite scroll**.
+  - **Swipe antar media:** geser kiri/kanan di viewer untuk berpindah ke foto/video berikutnya (video otomatis di-pause saat berpindah).
   - **Video Player** terintegrasi dengan dukungan streaming HTTP `Range` (`206 Partial Content`), seekbar, dan mute.
   - **Live Photo Player** (tap tombol `LIVE` atau tekan lama pada foto untuk memutar klip).
   - **Sheet Info ala iPhone Gallery** (tap `ⓘ` atau swipe ke atas) menampilkan tanggal, badge format (`HEIC`/`MP4`/`LIVE`/`4K`), dimensi & megapixel, **perangkat & kamera hasil EXIF** (mis. `Apple iPhone 12`, lensa, focal length, aperture, ISO, shutter speed, software), ukuran file, MIME type, dan SHA-256.
@@ -87,7 +94,7 @@ Pada layar awal aplikasi, masukkan URL server lokal (contoh: `http://192.168.1.1
 
 Aktifkan lewat **Settings → Backup Otomatis (Background)**. Agar berjalan saat aplikasi ditutup:
 
-- **iOS** (`ios/Runner/Info.plist`): sudah memuat `BGTaskSchedulerPermittedIdentifiers` (`com.syncfony.backup`) dan `UIBackgroundModes` (`fetch`, `processing`). `AppDelegate.swift` mendaftarkan plugin lewat `WorkmanagerPlugin.setPluginRegistrantCallback`.
+- **iOS** (`ios/Runner/Info.plist`): sudah memuat `BGTaskSchedulerPermittedIdentifiers` (`id.rikyripaldo.syncfony.backup`) dan `UIBackgroundModes` (`fetch`, `processing`). `AppDelegate.swift` mendaftarkan plugin lewat `WorkmanagerPlugin.setPluginRegistrantCallback`.
 - **Android**: tidak perlu perubahan manifest; WorkManager didaftarkan otomatis oleh plugin (butuh `minSdk >= 23`, default Flutter sudah 24).
 - **Batasan:** penjadwalan sepenuhnya ditentukan OS (iOS sangat konservatif, dan pada simulator background task tidak dijalankan). Backup manual di aplikasi tetap menjadi jalur utama.
 
@@ -137,6 +144,15 @@ Urutan pencarian saat runtime: **bahasa aktif → bahasa default → key**. Kare
 
 > Catatan: aset ikut dibundel saat build, jadi menambah bahasa memerlukan rebuild aplikasi. Kalau nanti ingin impor bahasa saat runtime (tanpa rebuild), bisa ditambahkan pembacaan JSON dari folder dokumen aplikasi.
 
+### Konfigurasi Native (Kunci Aplikasi)
+
+`local_auth` memerlukan:
+
+- **Android:** `MainActivity` turunan `FlutterFragmentActivity` (sudah diterapkan) + `MainActivity` tidak memakai `FlutterActivity` biasa.
+- **iOS:** kunci `NSFaceIDUsageDescription` di `Info.plist` (sudah ditambahkan).
+
+Jika perangkat tidak memiliki biometrik, aplikasi memakai PIN/pola/kata sandi perangkat (`biometricOnly: false`).
+
 ---
 
 ### Aset Ikon
@@ -155,6 +171,37 @@ Untuk mengganti ikon launcher nanti, cukup timpa file dengan nama yang sama di l
 
 ---
 
+## Pengujian & CI
+
+```bash
+# Server: unit + integration test (upload, dedup, list, delete, auth)
+cd server && cargo test
+
+# Client: unit test helper + smoke test layar pembuka
+cd client && flutter test
+```
+
+CI berjalan otomatis lewat GitHub Actions (`.github/workflows/ci.yml`):
+
+| Job | Langkah |
+|---|---|
+| Server (Rust) | `cargo check --all-targets` lalu `cargo test` (Ubuntu + `libheif-dev`, `clang`, `ffmpeg`) |
+| Client (Flutter) | `flutter pub get`, `flutter analyze`, `flutter test` |
+
+> Catatan: crate `heif-rs` mengunduh bundle libheif saat build pertama, jadi build server butuh akses jaringan sekali.
+
+---
+
+## Tentang
+
+- **Nama:** Syncfony
+- **Versi:** 1.0.0
+- **Kode sumber:** <https://github.com/Kynonim/Syncfony>
+
+Informasi ini juga tampil di aplikasi pada **Settings → Tentang**, lengkap dengan tombol untuk membuka repositori GitHub.
+
+---
+
 ## API Endpoints
 
 Jika `SYNCFONY_TOKEN` diaktifkan, sertakan header `Authorization: Bearer <token>` untuk semua endpoint tulis. Token lewat query parameter (`?token=`) hanya diterima pada request `GET` agar pemutar media tetap bisa memuat file.
@@ -163,10 +210,11 @@ Jika `SYNCFONY_TOKEN` diaktifkan, sertakan header `Authorization: Bearer <token>
 |---|---|---|
 | `GET` | `/api/health` | Cek status server |
 | `GET` | `/api/stats` | Statistik jumlah aset, ukuran asli, dan ukuran thumbnail |
-| `GET` | `/api/assets?limit=&offset=` | Daftar media terbaru (default 100, maks. 500) + `has_more` dan `total` |
+| `GET` | `/api/assets?limit=&offset=` | Daftar media terbaru (default 100, maks. 500) + `has_more` dan `total`. Mendukung `q=` (cari nama file) dan `kind=image|video` |
 | `GET` | `/api/assets/hashes` | Seluruh hash SHA-256 yang ada di server (untuk cek deduplikasi di client) |
 | `POST` | `/api/assets/check` | Cek daftar hash SHA-256 yang sudah ada di server |
 | `POST` | `/api/assets/backfill` | Baca ulang EXIF/tag video untuk media lama yang belum punya info kamera |
+| `POST` | `/api/maintenance/reconcile?dry_run=true` | Deteksi file yatim di disk; `dry_run=false` menghapusnya |
 | `POST` | `/api/upload` | Upload multipart (`file`, opsional `live_file`, `timestamp`, `device_id`) |
 | `GET` | `/api/assets/:id/thumb` | Mengambil thumbnail JPEG |
 | `GET` | `/api/assets/:id/file` | Mengambil/streaming file asli (mendukung HTTP `Range`) |

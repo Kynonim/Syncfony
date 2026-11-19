@@ -6,7 +6,7 @@ pub mod routes {
   use sha2::{Digest, Sha256};
   use tokio::io::AsyncWriteExt;
   use tower_http::services::ServeFile;
-  use crate::{database::Database, error::AppError, models::{BackfillResponse, CheckHashesRequest, CheckHashesResponse, ListQuery, Media, MediaPage, MediaResponse, MediaThumb, StatsResponse, UploadResponse}, storage::Storage};
+  use crate::{database::Database, error::AppError, models::{BackfillResponse, CheckHashesRequest, CheckHashesResponse, ListQuery, Media, MediaPage, MediaResponse, MediaThumb, ReconcileQuery, ReconcileResponse, StatsResponse, UploadResponse}, storage::Storage};
 
   #[derive(Clone)]
   pub struct AppState {
@@ -22,6 +22,7 @@ pub mod routes {
       .route("/api/assets/check", post(check_hashes))
       .route("/api/assets/hashes", get(list_hashes))
       .route("/api/assets/backfill", post(backfill_metadata))
+      .route("/api/maintenance/reconcile", post(reconcile))
       .route("/api/assets/{id}", delete(delete_media))
       .route("/api/assets/{id}/thumb", get(get_thumbnail))
       .route("/api/assets/{id}/file", get(get_original))
@@ -296,6 +297,67 @@ pub mod routes {
 
   /// Mengisi ulang metadata kamera untuk media yang diunggah sebelum fitur EXIF
   /// ada. Hanya file yang belum punya data perangkat/lensa yang diproses.
+  /// Mencari file di disk yang tidak punya baris di database (yatim) dan baris
+  /// yang filenya hilang. Default `dry_run=true` sehingga hanya melapor.
+  async fn reconcile(
+    State(state): State<AppState>,
+    Query(query): Query<ReconcileQuery>
+  ) -> Result<Json<ReconcileResponse>, AppError> {
+    let dry_run = query.dry_run.unwrap_or(true);
+    let items = state.db.query("select * from media").await?.take::<Vec<Media>>(0)?;
+
+    let mut expected = std::collections::HashSet::new();
+    let mut missing_files = 0usize;
+
+    for media in &items {
+      let file = state.storage.media_file_path(&media.storage_path, &media.hash, &media.extension);
+      let thumb = state.storage.thumb_file_path(&media.storage_path, &media.hash);
+      let live = state.storage.live_file_path(&media.storage_path, &media.hash);
+
+      if !tokio::fs::try_exists(state.storage.absolute_path(&file))
+        .await
+        .unwrap_or(false)
+      {
+        missing_files += 1;
+      }
+
+      expected.insert(file);
+      if media.has_thumb {
+        expected.insert(thumb);
+      }
+      if media.has_live.unwrap_or(false) {
+        expected.insert(live);
+      }
+    }
+
+    let files = state.storage.list_relative_files().await;
+    let scanned_files = files.len();
+    let mut orphan_files = 0usize;
+    let mut removed = 0usize;
+
+    for relative in files {
+      if relative.starts_with(".tmp/") || expected.contains(&relative) {
+        continue;
+      }
+      orphan_files += 1;
+      if !dry_run && state.storage.delete_file(&relative).await.is_ok() {
+        removed += 1;
+      }
+    }
+
+    tracing::info!(
+      "reconcile: {scanned_files} file dipindai, {orphan_files} yatim, {missing_files} hilang, {removed} dihapus (dry_run={dry_run})"
+    );
+
+    Ok(Json(ReconcileResponse {
+      dry_run,
+      scanned_files,
+      orphan_files,
+      missing_files,
+      removed
+    }))
+  }
+
   async fn backfill_metadata(State(state): State<AppState>) -> Result<Json<BackfillResponse>, AppError> {
     let items = state.db.query("select * from media").await?.take::<Vec<Media>>(0)?;
     let scanned = items.len();
@@ -343,6 +405,7 @@ pub mod routes {
       updated += 1;
     }
 
+    tracing::info!("backfill metadata: {} media dipindai, {} diperbarui", scanned, updated);
     Ok(Json(BackfillResponse { scanned, updated }))
   }
 
@@ -404,19 +467,59 @@ pub mod routes {
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let offset = query.offset.unwrap_or(0).max(0);
 
-    // Ambil satu baris ekstra untuk mengetahui apakah masih ada halaman berikutnya.
-    let mut assets = state.db
-      .query("select * from media order by timestamp desc limit $limit start $offset")
+    // Susun filter secara dinamis; hanya parameter yang dipakai yang di-bind.
+    let mut conditions = vec!["true".to_string()];
+    let text_filter = query
+      .q
+      .as_ref()
+      .map(|value| value.trim().to_lowercase())
+      .filter(|value| !value.is_empty());
+    if text_filter.is_some() {
+      conditions.push("string::lowercase(original_name) CONTAINS $q".to_string());
+    }
+
+    let kind_filter = match query.kind.as_deref() {
+      Some("image") => Some("image/".to_string()),
+      Some("video") => Some("video/".to_string()),
+      _ => None
+    };
+    if kind_filter.is_some() {
+      conditions.push("mimetype CONTAINS $kind".to_string());
+    }
+
+    let where_clause = conditions.join(" AND ");
+
+    let mut assets_query = state
+      .db
+      .query(format!(
+        "select * from media where {where_clause} order by timestamp desc limit $limit start $offset"
+      ))
       .bind(("limit", limit + 1))
-      .bind(("offset", offset))
-      .await?
-      .take::<Vec<Media>>(0)?;
+      .bind(("offset", offset));
+    if let Some(value) = &text_filter {
+      assets_query = assets_query.bind(("q", value.clone()));
+    }
+    if let Some(value) = &kind_filter {
+      assets_query = assets_query.bind(("kind", value.clone()));
+    }
+
+    let mut assets = assets_query.await?.take::<Vec<Media>>(0)?;
     let has_more = assets.len() as i64 > limit;
     if has_more {
       assets.truncate(limit as usize);
     }
 
-    let total = match state.db.query("select count() as total from media group all").await {
+    let mut count_query = state
+      .db
+      .query(format!("select count() as total from media where {where_clause} group all"));
+    if let Some(value) = &text_filter {
+      count_query = count_query.bind(("q", value.clone()));
+    }
+    if let Some(value) = &kind_filter {
+      count_query = count_query.bind(("kind", value.clone()));
+    }
+
+    let total = match count_query.await {
       Ok(mut response) => response.take::<Option<i64>>((0, "total")).ok().flatten(),
       Err(_) => None
     };
@@ -551,6 +654,44 @@ pub mod storage {
       self.root.join(path)
     }
 
+    /// Menghapus file sementara sisa proses upload yang terhenti/crash.
+    pub async fn cleanup_temp(&self) -> anyhow::Result<usize> {
+      let mut removed = 0usize;
+      if let Ok(mut entries) = tokio::fs::read_dir(self.temp_dir()).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+          if tokio::fs::remove_file(entry.path()).await.is_ok() {
+            removed += 1;
+          }
+        }
+      }
+      Ok(removed)
+    }
+
+    /// Semua file di dalam storage, sebagai path relatif terhadap root.
+    pub async fn list_relative_files(&self) -> Vec<String> {
+      let mut result = Vec::new();
+      let mut stack = vec![self.root.clone()];
+
+      while let Some(current) = stack.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&current).await else { continue };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+          let path = entry.path();
+          let is_dir = entry.file_type().await.map(|kind| kind.is_dir()).unwrap_or(false);
+          if is_dir {
+            stack.push(path);
+          } else if let Ok(relative) = path.strip_prefix(&self.root) {
+            result.push(
+              relative
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+            );
+          }
+        }
+      }
+
+      result
+    }
+
     pub async fn write(&self, path: &str, data: &[u8]) -> anyhow::Result<()> {
       let path = self.absolute_path(path);
       if let Some(parent) = path.parent() {
@@ -661,12 +802,8 @@ pub mod metadata {
     if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
   }
 
-  /// Membaca EXIF dari foto (JPEG/HEIC/TIFF) untuk info kamera ala galeri iPhone.
-  pub fn read_image_exif(path: &Path) -> Option<MediaExif> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
-    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
-
+  /// Memetakan tag EXIF yang sudah diparse ke struct kita.
+  fn from_exif(exif: &exif::Exif) -> MediaExif {
     let text = |tag: exif::Tag| -> Option<String> {
       exif
         .fields()
@@ -677,7 +814,7 @@ pub mod metadata {
       exif
         .fields()
         .find(|field| field.tag == tag)
-        .map(|field| field.display_value().with_unit(&exif).to_string())
+        .map(|field| field.display_value().with_unit(exif).to_string())
         .and_then(clean)
     };
 
@@ -707,7 +844,7 @@ pub mod metadata {
       .and_then(|value| NaiveDateTime::parse_from_str(&value, "%Y:%m:%d %H:%M:%S").ok())
       .map(|naive| DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
 
-    Some(MediaExif {
+    MediaExif {
       device_name,
       lens: text(exif::Tag::LensModel),
       focal_length: with_unit(exif::Tag::FocalLength),
@@ -716,7 +853,43 @@ pub mod metadata {
       iso,
       software: text(exif::Tag::Software),
       captured_at,
-    })
+    }
+  }
+
+  /// Membaca EXIF dari foto (JPEG/TIFF/HEIC/PNG/WebP).
+  ///
+  /// Strategi 1: parsing sadar-kontainer. Strategi 2 (fallback): cari blok
+  /// header TIFF/EXIF mentah di dalam file — sebagian HEIC iPhone menyimpan
+  /// EXIF di offset yang tidak dikenali parser kontainer.
+  pub fn read_image_exif(path: &Path) -> Option<MediaExif> {
+    if let Ok(file) = std::fs::File::open(path) {
+      let mut reader = std::io::BufReader::new(file);
+      if let Ok(exif) = exif::Reader::new().read_from_container(&mut reader) {
+        let meta = from_exif(&exif);
+        if meta.device_name.is_some() || meta.lens.is_some() || meta.software.is_some() {
+          return Some(meta);
+        }
+      }
+    }
+
+    let bytes = std::fs::read(path).ok()?;
+    let limit = bytes.len().min(4 * 1024 * 1024);
+    let mut index = 0usize;
+    while index + 4 <= limit {
+      let window = &bytes[index..index + 4];
+      if window == b"II\x2A\x00" || window == b"MM\x00\x2A" {
+        let payload = bytes[index..].to_vec();
+        if let Ok(exif) = exif::Reader::new().read_raw(payload) {
+          let meta = from_exif(&exif);
+          if meta.device_name.is_some() || meta.lens.is_some() {
+            return Some(meta);
+          }
+        }
+      }
+      index += 1;
+    }
+
+    None
   }
 
   /// Membaca tag metadata video (ffprobe) — iOS menyimpan make/model di tag QuickTime.
@@ -777,12 +950,12 @@ pub mod metadata {
 
 pub mod database {
   use std::sync::Arc;
-  use surrealdb::{Surreal, engine::local::{Db, RocksDb}};
+  use surrealdb::{Surreal, engine::local::{Db, SurrealKv}};
 
   pub type Database = Arc<Surreal<Db>>;
 
   pub async fn init(path: &str) -> anyhow::Result<Database> {
-    let db = Surreal::new::<RocksDb>(path).await?;
+    let db = Surreal::new::<SurrealKv>(path).await?;
     db.use_ns("syncfony").use_db("media").await?;
     db.query(r#"
       define table if not exists media schemafull;
@@ -917,7 +1090,16 @@ pub mod models {
   #[derive(Debug, Deserialize)]
   pub struct ListQuery {
     pub limit: Option<i64>,
-    pub offset: Option<i64>
+    pub offset: Option<i64>,
+    /// Pencarian nama file (case-insensitive).
+    pub q: Option<String>,
+    /// Filter jenis: `image` atau `video`.
+    pub kind: Option<String>
+  }
+
+  #[derive(Debug, Deserialize)]
+  pub struct ReconcileQuery {
+    pub dry_run: Option<bool>
   }
 
   #[derive(Debug, Serialize)]
@@ -944,6 +1126,15 @@ pub mod models {
     pub total_count: usize,
     pub total_size: i64,
     pub thumb_size: i64
+  }
+
+  #[derive(Debug, Serialize)]
+  pub struct ReconcileResponse {
+    pub dry_run: bool,
+    pub scanned_files: usize,
+    pub orphan_files: usize,
+    pub missing_files: usize,
+    pub removed: usize
   }
 
   #[derive(Debug, Serialize)]

@@ -31,4 +31,8 @@ class ThumbnailCache {
   static void clear() {
     _items.clear();
   }
+
+  static void remove(String key) {
+    _items.remove(key);
+  }
 }

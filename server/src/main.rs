@@ -22,6 +22,11 @@ async fn main() -> anyhow::Result<()> {
   let storage = Arc::new(storage::Storage::new(storage_url));
   storage.init().await?;
 
+  match storage.cleanup_temp().await {
+    Ok(removed) if removed > 0 => tracing::info!("Membersihkan {removed} file sementara sisa"),
+    _ => {}
+  }
+
   let state = routes::AppState { db, storage, auth_token };
 
   let mut app = Router::new()
