@@ -1,5 +1,5 @@
 .env
-Cargo.lock
 target/
 data/
 *.db
+.rules

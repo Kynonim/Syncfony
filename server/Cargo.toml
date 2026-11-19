@@ -2,7 +2,7 @@
 name = "syncfony"
 version = "0.1.0"
 edition = "2024"
-authors = ["Riky Ripaldo", "rikyripaldo@gmail.com"]
+authors = ["Riky Ripaldo", "rikyripaldo@gmail.com", "DeepSeek V4.1 Flash"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -13,6 +13,7 @@ ffmpeg-sidecar = "2.7.0"
 heif-rs = "26.10.3"
 hex = "0.4.3"
 image = "0.25.10"
+kamadak-exif = "0.6.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

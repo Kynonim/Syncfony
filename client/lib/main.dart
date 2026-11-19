@@ -1,40 +1,75 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:syncfony/api.dart';
-import 'package:syncfony/style.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:syncfony/background.dart';
+import 'package:syncfony/l10n.dart';
+import 'package:syncfony/service.dart';
+import 'package:syncfony/uix.dart';
 import 'package:syncfony/widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarBrightness: .dark,
-    systemNavigationBarColor: Colors.transparent,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarBrightness: .dark,
+      systemNavigationBarColor: Colors.transparent,
+    ),
+  );
+
+  // Muat preferensi tampilan & bahasa sebelum frame pertama agar tidak ada "flash".
+  final prefs = await SharedPreferences.getInstance();
+  glassBlurScale = (prefs.getDouble(glassBlurPrefsKey) ?? 1.0)
+      .clamp(minGlassBlurScale, maxGlassBlurScale)
+      .toDouble();
+  accentColor.value = accentById(prefs.getString(accentPrefsKey)).seed;
+  await l10n.load();
+
+  // Daftarkan tugas backup periodik jika sebelumnya diaktifkan di Settings.
+  await configureBackgroundBackup(
+    enabled: prefs.getBool(backgroundEnabledPrefsKey) ?? false,
+  );
+
   runApp(const App());
 }
 
 class App extends StatelessWidget {
   const App({super.key});
-
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Syncfony',
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF6C8CFF),
-        useMaterial3: true,
-        fontFamily: ".SF Pro Text",
-        scaffoldBackgroundColor: Colors.transparent,
-        snackBarTheme: const SnackBarThemeData(
-          behavior: .floating,
-          elevation: 0,
-        ),
-      ),
-      debugShowCheckedModeBanner: false,
-      home: const Syncfony(),
+    final textTheme = Theme.of(context).textTheme;
+    final brightness = View.of(context).platformDispatcher.platformBrightness;
+    final MaterialTheme theme = MaterialTheme(textTheme);
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([accentColor, l10n]),
+      builder: (context, _) {
+        // Hanya kirim locale yang benar-benar didukung delegate Material.
+        // Tanpa ini, Locale('id') akan gagal menemukan MaterialLocalizations.
+        final active = Locale(l10n.code);
+        final activeSupported = GlobalMaterialLocalizations.delegate.isSupported(active);
+        final materialLocales = <Locale>[
+          for (final option in l10n.languages)
+            if (GlobalMaterialLocalizations.delegate.isSupported(Locale(option.code)))
+              Locale(option.code),
+          const Locale('en'),
+        ];
+
+        return MaterialApp(
+          title: 'Syncfony',
+          theme: brightness == .light ? theme.light() : theme.dark(),
+          locale: activeSupported ? active : const Locale('en'),
+          supportedLocales: materialLocales,
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const Syncfony(),
+          debugShowCheckedModeBanner: false,
+        );
+      },
     );
   }
 }
@@ -47,17 +82,23 @@ class Syncfony extends StatefulWidget {
 
 class SyncfonyState extends State<Syncfony> {
   bool isChecking = false;
-  static const prefkey = "syncfony_server_url";
+  static const prefsKey = serverUrlPrefsKey;
+  static const tokenPrefsKey = serverTokenPrefsKey;
   final focus = FocusNode();
-  final controller = TextEditingController(text: "http://localhost:2026");
+  final controller = TextEditingController(text: "http://127.0.0.1:2026");
+  final tokenController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    SharedPreferences.getInstance().then((p) {
-      final saved = p.getString(prefkey);
+    SharedPreferences.getInstance().then((x) {
+      final saved = x.getString(prefsKey);
       if (saved != null && saved.isNotEmpty) {
         controller.text = saved;
+      }
+      final savedToken = x.getString(tokenPrefsKey);
+      if (savedToken != null && savedToken.isNotEmpty) {
+        tokenController.text = savedToken;
       }
     });
     Future.delayed(const Duration(microseconds: 400), () {
@@ -65,37 +106,41 @@ class SyncfonyState extends State<Syncfony> {
     });
   }
 
-  Future<void> go() async {
+  Future<void> run() async {
     final url = controller.text.trim();
+    final token = tokenController.text.trim();
     if (url.isEmpty) return;
     setState(() => isChecking = true);
-
     try {
-      final health = await http.get(Uri.parse("$url/api/health")).timeout(const Duration(seconds: 5));
-      if (health.statusCode != 200) throw Exception("server tidak merespon");
+      final api = Api(url, token: token.isEmpty ? null : token);
+      final isHealth = await api.checkServer();
+      if (!isHealth) throw Exception("Koneksi terputus");
+      if (token.isNotEmpty) {
+        await api.getStats();
+      }
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(prefkey, url);
+      await prefs.setString(prefsKey, url);
+      await prefs.setString(tokenPrefsKey, token);
       if (!mounted) return;
-      Navigator.of(context).push(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 450),
-          pageBuilder: (_, a, _) => FadeTransition(
-            opacity: a,
-            child: GaleryManager(api: Api(url)),
-          ),
-          transitionsBuilder: (_, a, _, child) {
-            final offset = Tween(begin: const Offset(0, 0.04), end: Offset.zero).animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic));
-            return FadeTransition(
-              opacity: a,
-              child: SlideTransition(position: offset, child: child),
-            );
-          },
+      goto(
+        context,
+        SyncfonyGallery(
+          serverUrl: url,
+          token: token.isEmpty ? null : token,
         ),
       );
     } catch (e) {
       if (!mounted) return;
+      final msg = e.toString();
+      final err = msg.contains("401")
+          ? t('error.tokenInvalid')
+          : msg.contains("errno = 1")
+              ? t('error.network')
+              : msg.contains("errno = 61")
+                  ? t('error.offline')
+                  : t('error.connect', args: {'error': msg});
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Connection error: $e"), backgroundColor: Colors.red.shade700),
+        SnackBar(content: Text(err), backgroundColor: Colors.red.shade800),
       );
     } finally {
       if (mounted) setState(() => isChecking = false);
@@ -106,144 +151,112 @@ class SyncfonyState extends State<Syncfony> {
   void dispose() {
     focus.dispose();
     controller.dispose();
+    tokenController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      body: SyncfonyFluid(
-        child: SafeArea(
-          child: Center(
+      body: Stack(
+        children: [
+          const Positioned.fill(child: AppBackground()),
+          Center(
             child: SingleChildScrollView(
-              padding: .all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 700),
-                  curve: Curves.easeOutCubic,
-                  builder: (context, v, child) {
-                    return Opacity(
-                      opacity: v,
-                      child: Transform.translate(
-                        offset: Offset(0, 16 * (1 - v)),
-                        child: child,
-                      ),
-                    );
-                  },
-                  child: SyncfonyPanel(
-                    padding: const .all(28),
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Column(
+                mainAxisAlignment: .center,
+                children: [
+                  const AppLogo(size: 112),
+                  const SizedBox(height: 10),
+                  const Text(
+                    "Syncfony",
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 40, letterSpacing: -1.2),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    t('welcome.tagline'),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  GlassSurface(
+                    radius: 30,
+                    opacity: 0.55,
+                    blur: 30,
+                    padding: const EdgeInsets.all(20),
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
                     child: Column(
-                      mainAxisSize: .min,
-                      crossAxisAlignment: .stretch,
                       children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            shape: .circle,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF6C8CFF), Color(0xFFB06CFF)],
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF6C8CFF).withValues(alpha: 0.4),
-                                blurRadius: 20,
-                                offset: const Offset(0, 8),
-                              ),
-                            ]
-                          ),
-                          child: const Icon(Icons.cloud_rounded, color: Colors.white, size: 32),
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          "Syncfony",
-                          textAlign: .center,
-                          style: theme.textTheme.headlineMedium?.copyWith(
-                            fontWeight: .w700,
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          "Backup Foto & Video ke Server Pribadi",
-                          textAlign: .center,
-                          style: theme.textTheme.bodyMedium?.copyWith(color: Colors.black54),
-                        ),
-                        const SizedBox(height: 28),
                         TextField(
                           controller: controller,
                           focusNode: focus,
                           keyboardType: .url,
-                          textInputAction: .go,
-                          onSubmitted: (_) => isChecking ? null : go(),
+                          textInputAction: .next,
                           decoration: InputDecoration(
-                            labelText: "Server URL",
-                            hintText: "http://192.168.0.1:2026",
+                            labelText: t('server.url'),
+                            hintText: "http://127.0.0.1:2026",
                             prefixIcon: const Icon(Icons.link_rounded),
-                            filled: true,
-                            fillColor: Colors.white.withValues(alpha: 0.6),
-                            border: OutlineInputBorder(
-                              borderRadius: .circular(16),
-                              borderSide: .none,
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: .circular(16),
-                              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.8)),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: .circular(16),
-                              borderSide: const BorderSide(color: Color(0xFF6C8CFF), width: 1.5),
-                            ),
                           ),
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: tokenController,
+                          obscureText: true,
+                          textInputAction: .go,
+                          onSubmitted: (_) => isChecking ? null : run(),
+                          decoration: InputDecoration(
+                            labelText: t('server.token'),
+                            hintText: t('server.tokenHint'),
+                            prefixIcon: const Icon(Icons.key_rounded),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
                         SizedBox(
-                          height: 52,
+                          height: 54,
+                          width: double.infinity,
                           child: FilledButton(
-                            onPressed: isChecking ? null : go,
+                            onPressed: isChecking ? null : run,
                             style: FilledButton.styleFrom(
-                              shape: RoundedRectangleBorder(borderRadius: .circular(16)),
-                              backgroundColor: const Color(0xFF6C8CFF),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: .circular(20),
+                              ),
                             ),
                             child: AnimatedSwitcher(
                               duration: const Duration(milliseconds: 250),
-                              child: isChecking ? const SizedBox(
-                                key: ValueKey("l"),
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.4,
-                                  color: Colors.white,
-                                ),
-                              ) : const Row(
-                                key: ValueKey("t"),
-                                mainAxisAlignment: .center,
-                                children: [
-                                  Text(
-                                    "Start",
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: .w600,
+                              child: isChecking
+                                  ? const SizedBox(
+                                      key: ValueKey("l"),
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                                    )
+                                  : Row(
+                                      key: const ValueKey("t"),
+                                      mainAxisAlignment: .center,
+                                      children: [
+                                        Text(
+                                          t('action.start'),
+                                          style: const TextStyle(fontSize: 16, fontWeight: .w600),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        const Icon(Icons.arrow_forward_ios, size: 16),
+                                      ],
                                     ),
-                                  ),
-                                  SizedBox(width: 8),
-                                  Icon(Icons.arrow_forward_rounded, size: 30),
-                                ],
-                              ),
                             ),
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
+                ],
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

@@ -66,5 +66,23 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Syncfony perlu mengakses galeri untuk mencadangkan foto dan video ke server Anda sendiri.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Syncfony perlu menyimpan media dari server ke galeri bila Anda mengunduhnya.</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.syncfony.backup</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
 </dict>
 </plist>
