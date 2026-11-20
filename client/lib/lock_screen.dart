@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:syncfony/app_info.dart';
 import 'package:syncfony/l10n.dart';
 import 'package:syncfony/uix.dart';

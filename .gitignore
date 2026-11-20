@@ -3,3 +3,4 @@ target/
 data/
 *.db
 .rules
+.DS_Store

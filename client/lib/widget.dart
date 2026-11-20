@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -95,6 +95,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   int precacheDone = 0;
   int precacheTotal = 0;
   String accentId = accentOptions.first.id;
+  int? _thumbCacheBytes;
 
   static const String _gridColumnsPrefsKey = gridColumnsPrefsKey;
   static const String _blurScalePrefsKey = glassBlurPrefsKey;
@@ -137,6 +138,13 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     settingsScroll.addListener(() => _updateNavbarVisibility(settingsScroll));
 
     _loadInitial();
+    unawaited(_refreshThumbCacheSize());
+  }
+
+  Future<void> _refreshThumbCacheSize() async {
+    final size = await ThumbnailStore.sizeBytes();
+    if (!mounted) return;
+    setState(() => _thumbCacheBytes = size);
   }
 
   void _updateNavbarVisibility(ScrollController controller) {
@@ -227,7 +235,11 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         isLoadingMedia = false;
         offlineMode = false;
       });
-      unawaited(_saveMediaCache());
+      // Jangan menimpa cache offline dengan hasil filter: filter "video" tanpa
+      // hasil tidak boleh membuat foto seolah-olah hilang saat offline.
+      if (searchQuery.isEmpty && mediaKind == 'all') {
+        unawaited(_saveMediaCache());
+      }
     } catch (e) {
       // Offline / server mati: pakai daftar terakhir yang tersimpan.
       final cached = await _readMediaCache();
@@ -336,14 +348,14 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   Future<void> _backfillCameraInfo() async {
     if (isBackfilling) return;
     setState(() => isBackfilling = true);
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
       SnackBar(content: Text(t('server.backfillRunning'))),
     );
     try {
       final result = await api.backfillMetadata();
       await _fetchMedia();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('server.backfillDone', args: {
             'updated': '${result['updated'] ?? 0}',
@@ -353,7 +365,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('server.backfillFailed', args: {'error': '$e'})),
           backgroundColor: Colors.red.shade800,
@@ -405,12 +417,12 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(content: Text(t('server.precacheDone', args: {'count': '$precacheDone'}))),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('viewer.downloadFailed', args: {'error': '$e'})),
           backgroundColor: Colors.red.shade800,
@@ -418,6 +430,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       );
     } finally {
       if (mounted) setState(() => isPrecaching = false);
+      unawaited(_refreshThumbCacheSize());
     }
   }
 
@@ -433,7 +446,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       final scanned = report['scanned'] ?? 0;
 
       if (orphans == 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
           SnackBar(
             content: Text(t('server.reconcileClean', args: {
               'scanned': '$scanned',
@@ -469,7 +482,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
 
       final result = await api.reconcile(dryRun: false);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('server.reconcileDeleted', args: {
             'removed': '${result['removed'] ?? 0}',
@@ -478,7 +491,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('server.reconcileFailed', args: {'error': '$e'})),
           backgroundColor: Colors.red.shade800,
@@ -605,18 +618,20 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       await api.deleteMedia(item.id);
       await ThumbnailStore.delete(item.id);
       ThumbnailCache.remove(item.id);
+      unawaited(DownloadIndex.remove(api.normalizedUrl, item.id));
       if (!mounted) return;
       setState(() {
         mediaItems.removeWhere((m) => m.id == item.id);
         if (_mediaOffset > 0) _mediaOffset -= 1;
       });
+      unawaited(_refreshThumbCacheSize());
       _fetchStats();
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(content: Text(t('viewer.deleted'))),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('viewer.deleteFailed', args: {'error': '$e'})),
           backgroundColor: Colors.red.shade800,
@@ -669,7 +684,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     if (!mounted) return;
     _fetchMedia();
     _fetchStats();
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
       SnackBar(
         content: Text(
           t('local.done', args: {
@@ -889,6 +904,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
 
   Widget _buildMediaTab() {
     final topPad = MediaQuery.of(context).padding.top + 80;
+    final filtered = searchQuery.isNotEmpty || mediaKind != 'all';
     if (isLoadingMedia && mediaItems.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -899,10 +915,23 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         subtitle: mediaError!,
         scrollController: mediaScroll,
         topPadding: topPad + 40,
-        action: FilledButton.icon(
-          onPressed: _fetchMedia,
-          icon: const Icon(Icons.refresh),
-          label: Text(t('action.retry')),
+        action: Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.icon(
+              onPressed: _fetchMedia,
+              icon: const Icon(Icons.refresh),
+              label: Text(t('action.retry')),
+            ),
+            if (filtered)
+              OutlinedButton.icon(
+                onPressed: _clearFilter,
+                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                label: Text(t('filter.clear')),
+              ),
+          ],
         ),
       );
     }
@@ -910,11 +939,30 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       return RefreshIndicator(
         onRefresh: _loadInitial,
         child: _emptyStateCard(
-          icon: Icons.photo_library_outlined,
-          title: t('media.empty.title'),
-          subtitle: t('media.empty.subtitle'),
+          icon: filtered ? Icons.filter_alt_off_rounded : Icons.photo_library_outlined,
+          title: filtered ? t('media.emptyFiltered.title') : t('media.empty.title'),
+          subtitle: filtered ? t('media.emptyFiltered.subtitle') : t('media.empty.subtitle'),
           scrollController: mediaScroll,
           topPadding: topPad + 40,
+          action: filtered
+              ? Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _showFilterSheet,
+                      icon: const Icon(Icons.tune_rounded, size: 18),
+                      label: Text(t('filter.title')),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _clearFilter,
+                      icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                      label: Text(t('filter.clear')),
+                    ),
+                  ],
+                )
+              : null,
         ),
       );
     }
@@ -1178,16 +1226,27 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                   ),
                   const SizedBox(height: 16),
                   if (backup.isUploading) ...[
-                    LinearProgressIndicator(value: backup.progress),
-                    const SizedBox(height: 8),
-                    Text(
-                      t('backup.uploadingItem', args: {
-                        'done': '${backup.completedCount + backup.failedCount}',
-                        'total': '${backup.totalQueued}',
-                        'name': backup.currentFileName ?? '',
-                      }),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final circleSize = constraints.maxWidth >= 560 ? 72.0 : 56.0;
+                        return Row(
+                          children: [
+                            _backupProgressCircle(circleSize),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Text(
+                                t('backup.uploadingItem', args: {
+                                  'done': '${backup.completedCount + backup.failedCount}',
+                                  'total': '${backup.totalQueued}',
+                                  'name': backup.currentFileName ?? '',
+                                }),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
                   ],
@@ -1544,12 +1603,12 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                       backup.attachApi(testApi);
                       backup.scan();
                       _loadInitial();
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
                         SnackBar(content: Text(t('server.saved'))),
                       );
                     } catch (e) {
                       if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
                         SnackBar(
                           content: Text(t('server.failed', args: {'error': '$e'})),
                           backgroundColor: Colors.red.shade800,
@@ -1582,7 +1641,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                         final ok = await AppLock.authenticate();
                         if (!ok) {
                           if (!mounted) return;
-                          messenger.showSnackBar(
+                          messenger..clearSnackBars()..showSnackBar(
                             SnackBar(content: Text(t('lock.unavailable'))),
                           );
                           return;
@@ -1607,7 +1666,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                   await configureBackgroundBackup(enabled: value);
                   if (!mounted) return;
                   setState(() => backgroundEnabled = value);
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
                     SnackBar(
                       content: Text(
                         value ? t('server.backgroundOn') : t('server.backgroundOff'),
@@ -1657,12 +1716,19 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
               ListTile(
                 leading: const Icon(Icons.photo_size_select_small_rounded),
                 title: Text(t('server.clearThumbs')),
-                subtitle: Text(t('server.clearThumbsSubtitle')),
+                isThreeLine: true,
+                subtitle: Text(
+                  '${t('server.clearThumbsSubtitle')}\n'
+                  '${t('server.cacheSize', args: {
+                    'size': _thumbCacheBytes == null ? t('info.loading') : formatBytes(_thumbCacheBytes!),
+                  })}',
+                ),
                 onTap: () async {
                   await ThumbnailStore.clear();
                   ThumbnailCache.clear();
+                  await _refreshThumbCacheSize();
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
                     SnackBar(content: Text(t('server.clearThumbsDone'))),
                   );
                 },
@@ -1675,7 +1741,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                 onTap: () async {
                   await backup.clearCache();
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
                     SnackBar(content: Text(t('server.resetCacheDone'))),
                   );
                 },
@@ -1772,7 +1838,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     if (!mounted) return;
     await Clipboard.setData(ClipboardData(text: AppInfo.repository));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
       SnackBar(content: Text(t('about.linkCopied'))),
     );
   }
@@ -1814,6 +1880,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     if ((index == 1 || index == 2) && !backup.isScanning && !backup.isUploading) {
       backup.scan();
     }
+    if (index == 3) unawaited(_refreshThumbCacheSize());
   }
 
   Widget _navItem(BuildContext context, {required int index, required IconData icon, required String label}) {
@@ -1869,15 +1936,53 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     );
   }
 
+  Widget _backupProgressCircle(double size) {
+    final scheme = Theme.of(context).colorScheme;
+    final percent = (backup.progress * 100).round();
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SizedBox(
+            width: size,
+            height: size,
+            child: CircularProgressIndicator(
+              value: backup.progress > 0 ? backup.progress : null,
+              strokeWidth: size >= 64 ? 5.5 : 4.2,
+              backgroundColor: scheme.primary.withValues(alpha: 0.15),
+            ),
+          ),
+          Text(
+            '$percent%',
+            style: TextStyle(
+              fontSize: size * 0.22,
+              fontWeight: FontWeight.w700,
+              color: scheme.primary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTopHeader(BuildContext context, bool visible) {
     final scheme = Theme.of(context).colorScheme;
     const tabKeys = ['nav.media', 'nav.local', 'nav.backup', 'nav.settings'];
-    final subtitle = backup.isUploading
-        ? t('header.uploading', args: {
-            'done': '${backup.completedCount + backup.failedCount}',
-            'total': '${backup.totalQueued}',
-          })
+    final uploading = backup.isUploading;
+    final uploadInfo = t('header.uploading', args: {
+      'done': '${backup.completedCount + backup.failedCount}',
+      'total': '${backup.totalQueued}',
+    });
+    final title = uploading ? uploadInfo : "Syncfony";
+    final subtitle = uploading
+        ? ((backup.currentFileName?.trim().isNotEmpty ?? false)
+            ? backup.currentFileName!.trim()
+            : t('nav.backup'))
         : "${t(tabKeys[currentTab % tabKeys.length])} • ${shortHost(api.normalizedUrl)}";
+    final wide = MediaQuery.sizeOf(context).width >= 700;
+    final progressSize = wide ? 64.0 : 52.0;
 
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 320),
@@ -1890,78 +1995,52 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         blur: 30,
         opacity: 0.58,
         padding: const EdgeInsets.fromLTRB(10, 9, 9, 9),
-        child: Column(
-          mainAxisSize: .min,
-          crossAxisAlignment: .stretch,
+        child: Row(
           children: [
-            Row(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(13),
-                  child: const AppLogo(size: 38),
-                ),
-                const SizedBox(width: 11),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: .start,
-                    mainAxisSize: .min,
-                    children: [
-                      const Text(
-                        "Syncfony",
-                        style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w700, letterSpacing: -0.35),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w500,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (backup.isUploading)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Text(
-                      "${(backup.progress * 100).round()}%",
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: scheme.primary,
-                      ),
+            if (uploading)
+              _backupProgressCircle(progressSize)
+            else
+              ClipRRect(
+                borderRadius: BorderRadius.circular(13),
+                child: const AppLogo(size: 38),
+              ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: .start,
+                mainAxisSize: .min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: uploading ? 14.5 : 16.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.35,
                     ),
                   ),
-                GlassIconButton(
-                  icon: backup.isUploading ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                  size: 40,
-                  iconSize: 20,
-                  active: backup.isUploading,
-                  onPressed: _toggleBackup,
-                  tooltip: backup.isUploading ? t('action.pauseBackup') : t('action.startBackup'),
-                ),
-              ],
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 240),
-              curve: Curves.easeOutCubic,
-              child: backup.isUploading
-                  ? Padding(
-                      padding: const EdgeInsets.only(top: 9, left: 3, right: 3),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: backup.progress > 0 ? backup.progress : null,
-                          minHeight: 3.5,
-                          backgroundColor: scheme.primary.withValues(alpha: 0.15),
-                        ),
-                      ),
-                    )
-                  : const SizedBox(height: 0),
+            GlassIconButton(
+              icon: uploading ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              size: 40,
+              iconSize: 20,
+              active: uploading,
+              onPressed: _toggleBackup,
+              tooltip: uploading ? t('action.pauseBackup') : t('action.startBackup'),
             ),
           ],
         ),
@@ -2285,6 +2364,125 @@ String formatReadableDate(DateTime dt) {
   return '${dt.day} $month ${dt.year} - $hour:$minute';
 }
 
+const List<double> _videoSpeedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
+String _videoSpeedLabel(double speed) {
+  final text = speed
+      .toStringAsFixed(2)
+      .replaceAll(RegExp(r'0+$'), '')
+      .replaceAll(RegExp(r'\.$'), '');
+  return '$text×';
+}
+
+/// Kontrol pemutar video yang dipakai bersama oleh viewer server dan lokal.
+class _VideoControlsBar extends StatelessWidget {
+  final VideoPlayerController controller;
+  final bool isMuted;
+  final VoidCallback onToggleMute;
+  final double speed;
+  final ValueChanged<double> onSpeedChanged;
+  final bool isFullscreen;
+  final VoidCallback onToggleFullscreen;
+
+  const _VideoControlsBar({
+    required this.controller,
+    required this.isMuted,
+    required this.onToggleMute,
+    required this.speed,
+    required this.onSpeedChanged,
+    required this.isFullscreen,
+    required this.onToggleFullscreen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final value = controller.value;
+    return GlassSurface(
+      radius: 18,
+      blur: 22,
+      opacity: 0.6,
+      shadow: false,
+      tint: const Color(0xFF0B1210),
+      padding: const EdgeInsets.fromLTRB(12, 8, 6, 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          VideoProgressIndicator(
+            controller,
+            allowScrubbing: true,
+            colors: VideoProgressColors(
+              playedColor: Theme.of(context).colorScheme.primary,
+              bufferedColor: Colors.white30,
+              backgroundColor: Colors.white12,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${formatClock(value.position.inSeconds)} / ${formatClock(value.duration.inSeconds)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+              PopupMenuButton<double>(
+                tooltip: t('viewer.speed'),
+                initialValue: speed,
+                onSelected: onSpeedChanged,
+                itemBuilder: (context) => _videoSpeedOptions
+                    .map(
+                      (option) => PopupMenuItem<double>(
+                        value: option,
+                        child: Text(_videoSpeedLabel(option)),
+                      ),
+                    )
+                    .toList(),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  child: Text(
+                    _videoSpeedLabel(speed),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                iconSize: 20,
+                tooltip: isMuted ? t('viewer.unmute') : t('viewer.mute'),
+                icon: Icon(
+                  isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                  color: Colors.white,
+                ),
+                onPressed: onToggleMute,
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                iconSize: 20,
+                tooltip: isFullscreen
+                    ? t('viewer.exitFullscreen')
+                    : t('viewer.fullscreen'),
+                icon: Icon(
+                  isFullscreen
+                      ? Icons.fullscreen_exit_rounded
+                      : Icons.fullscreen_rounded,
+                  color: Colors.white,
+                ),
+                onPressed: onToggleFullscreen,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LocalAssetViewerPage extends StatefulWidget {
   final AssetEntity asset;
   final Api api;
@@ -2306,12 +2504,16 @@ class LocalAssetViewerPage extends StatefulWidget {
 class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
   File? _file;
   int? _fileSize;
+  String? _mime;
   VideoPlayerController? _video;
   VideoPlayerController? _live;
   bool _loading = true;
   bool _uploading = false;
   bool _playingLive = false;
   bool _showControls = true;
+  bool _isFullscreen = false;
+  bool _isMuted = false;
+  double _playbackSpeed = 1.0;
   String? _error;
 
   bool get _isVideo => widget.asset.type == AssetType.video;
@@ -2334,15 +2536,20 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
         return;
       }
       final size = await file.length();
+      final mime = await detectAssetMimeType(file, widget.asset);
       if (!mounted) return;
       setState(() {
         _file = file;
         _fileSize = size;
+        _mime = mime;
       });
+      // Info ukuran/MIME idealnya dari file asli; jangan menahan preview.
+      unawaited(_refreshOriginalInfo());
 
       if (_isVideo) {
         final controller = VideoPlayerController.file(file);
         await controller.initialize();
+        await controller.setPlaybackSpeed(_playbackSpeed);
         controller.addListener(_tick);
         await controller.play();
         if (!mounted) {
@@ -2369,6 +2576,69 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _refreshOriginalInfo() async {
+    try {
+      final origin = await widget.asset.originFile;
+      if (origin == null || !mounted) return;
+      final size = await origin.length();
+      final mime = await detectAssetMimeType(origin, widget.asset);
+      if (!mounted) return;
+      setState(() {
+        _fileSize = size;
+        _mime = mime;
+      });
+    } catch (_) {
+      // Biarkan info dari file terkompresi bila file asli tidak tersedia.
+    }
+  }
+
+  void _toggleMute() {
+    final controller = _video;
+    if (controller == null) return;
+    setState(() {
+      _isMuted = !_isMuted;
+      controller.setVolume(_isMuted ? 0.0 : 1.0);
+    });
+  }
+
+  void _setPlaybackSpeed(double speed) {
+    _playbackSpeed = speed;
+    _video?.setPlaybackSpeed(speed);
+    setState(() {});
+  }
+
+  Future<void> _toggleFullscreen() async {
+    if (_isFullscreen) {
+      await _exitFullscreen();
+    } else {
+      await _enterFullscreen();
+    }
+  }
+
+  Future<void> _enterFullscreen() async {
+    if (_isFullscreen) return;
+    setState(() {
+      _isFullscreen = true;
+      _showControls = true;
+    });
+    if (Platform.isAndroid || Platform.isIOS) {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+  }
+
+  Future<void> _exitFullscreen() async {
+    if (!_isFullscreen) return;
+    setState(() => _isFullscreen = false);
+    if (Platform.isAndroid || Platform.isIOS) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[]);
+    }
+  }
+
   Future<void> _playLive() async {
     if (_playingLive) return;
     try {
@@ -2385,7 +2655,7 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
       if (mounted) setState(() => _playingLive = true);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         const SnackBar(content: Text('Gagal memutar Live Photo')),
       );
     }
@@ -2400,6 +2670,10 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
 
   @override
   void dispose() {
+    if (_isFullscreen && (Platform.isAndroid || Platform.isIOS)) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      SystemChrome.setPreferredOrientations(const <DeviceOrientation>[]);
+    }
     _video?.dispose();
     _live?.dispose();
     super.dispose();
@@ -2413,7 +2687,7 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
     if (!mounted) return;
     setState(() => _uploading = false);
     final skipped = widget.backup.skippedCount > 0 && widget.backup.completedCount == 0;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
       SnackBar(
         content: Text(skipped ? t('local.alreadyOnServer') : t('local.backupDone')),
       ),
@@ -2455,19 +2729,21 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
                   ),
                 ),
                 Text(
-                  formatReadableDate(asset.createDateTime),
+                  (asset.title?.trim().isNotEmpty ?? false)
+                      ? asset.title!.trim()
+                      : t('viewer.noName'),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
+                  softWrap: true,
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  asset.title ?? t('viewer.noName'),
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  formatReadableDate(asset.createDateTime),
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  softWrap: true,
                 ),
                 const SizedBox(height: 16),
                 _localInfoRow(
@@ -2475,6 +2751,10 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
                   _isVideo
                       ? t('info.video')
                       : (asset.isLivePhoto ? t('info.livePhoto') : t('info.photo')),
+                ),
+                _localInfoRow(
+                  t('info.mime'),
+                  _mime ?? t('info.loading'),
                 ),
                 _localInfoRow(
                   'Dimensi',
@@ -2504,14 +2784,15 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label, style: const TextStyle(color: Colors.white60, fontSize: 13)),
-          const Spacer(),
-          Flexible(
+          const SizedBox(width: 12),
+          Expanded(
             child: Text(
               value,
               textAlign: TextAlign.right,
-              overflow: TextOverflow.ellipsis,
+              softWrap: true,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 13,
@@ -2528,57 +2809,67 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
   Widget build(BuildContext context) {
     final asset = widget.asset;
     final backedUp = widget.backup.isBackedUp(asset.id);
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: viewerGlassBar(),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              asset.title ?? t('viewer.localTitle'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 16),
-            ),
-            Text(
-              formatReadableDate(asset.createDateTime),
-              style: const TextStyle(fontSize: 11, color: Colors.white70),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.info_outline_rounded),
-            onPressed: _showInfo,
-          ),
-        ],
-      ),
-      body: _buildBody(),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: FilledButton.icon(
-            onPressed: (backedUp || _uploading) ? null : _upload,
-            icon: _uploading
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(backedUp ? Icons.cloud_done_rounded : Icons.cloud_upload_rounded),
-            label: Text(
-              backedUp
-                  ? t('local.alreadyBackedUp')
-                  : (_uploading ? t('local.uploading') : t('local.backupNow')),
-            ),
-          ),
-        ),
+    return PopScope(
+      canPop: !_isFullscreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isFullscreen) _exitFullscreen();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        extendBodyBehindAppBar: !_isFullscreen,
+        appBar: _isFullscreen
+            ? null
+            : AppBar(
+                backgroundColor: Colors.transparent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                flexibleSpace: viewerGlassBar(),
+                title: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      asset.title ?? t('viewer.localTitle'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                    Text(
+                      formatReadableDate(asset.createDateTime),
+                      style: const TextStyle(fontSize: 11, color: Colors.white70),
+                    ),
+                  ],
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.info_outline_rounded),
+                    onPressed: _showInfo,
+                  ),
+                ],
+              ),
+        body: _buildBody(),
+        bottomNavigationBar: _isFullscreen
+            ? null
+            : SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: FilledButton.icon(
+                    onPressed: (backedUp || _uploading) ? null : _upload,
+                    icon: _uploading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(backedUp ? Icons.cloud_done_rounded : Icons.cloud_upload_rounded),
+                    label: Text(
+                      backedUp
+                          ? t('local.alreadyBackedUp')
+                          : (_uploading ? t('local.uploading') : t('local.backupNow')),
+                    ),
+                  ),
+                ),
+              ),
       ),
     );
   }
@@ -2707,14 +2998,14 @@ class _LocalAssetViewerPageState extends State<LocalAssetViewerPage> {
             left: 16,
             right: 16,
             bottom: MediaQuery.of(context).padding.bottom + 16,
-            child: VideoProgressIndicator(
-              controller,
-              allowScrubbing: true,
-              colors: VideoProgressColors(
-                playedColor: Theme.of(context).colorScheme.primary,
-                bufferedColor: Colors.white30,
-                backgroundColor: Colors.white12,
-              ),
+            child: _VideoControlsBar(
+              controller: controller,
+              isMuted: _isMuted,
+              onToggleMute: _toggleMute,
+              speed: _playbackSpeed,
+              onSpeedChanged: _setPlaybackSpeed,
+              isFullscreen: _isFullscreen,
+              onToggleFullscreen: _toggleFullscreen,
             ),
           ),
         ],
@@ -2753,12 +3044,16 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
   bool _isVideoError = false;
   bool _isMuted = false;
   bool _showControls = true;
+  bool _isFullscreen = false;
+  double _playbackSpeed = 1.0;
   bool _downloading = false;
   double _downloadProgress = 0;
 
   VideoPlayerController? _liveController;
   bool _isPlayingLive = false;
   bool _isLoadingLive = false;
+  File? _localPhoto;
+  bool _localPhotoChecked = false;
 
   @override
   void initState() {
@@ -2768,17 +3063,34 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
         ? 0
         : widget.initialIndex.clamp(0, widget.items.length - 1);
     _pageController = PageController(initialPage: _index);
-    if (_items.isNotEmpty && _item.isVideo) {
-      _initVideo();
+    if (_items.isNotEmpty) {
+      if (_item.isVideo) {
+        _initVideo();
+      } else {
+        _loadLocalPhoto();
+      }
     }
   }
 
   Future<void> _onPageChanged(int index) async {
+    if (_isFullscreen) await _exitFullscreen();
     setState(() => _index = index);
     await _resetPlayback();
     if (_item.isVideo) {
       await _initVideo();
+    } else {
+      _loadLocalPhoto();
     }
+  }
+
+  Future<void> _loadLocalPhoto() async {
+    final item = _item;
+    final local = await DownloadIndex.lookupMedia(widget.api.normalizedUrl, item);
+    if (!mounted || _item.id != item.id) return;
+    setState(() {
+      _localPhoto = local;
+      _localPhotoChecked = true;
+    });
   }
 
   Future<void> _resetPlayback() async {
@@ -2793,6 +3105,9 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
     _isPlayingLive = false;
     _isLoadingLive = false;
     _showControls = true;
+    _isMuted = false;
+    _localPhoto = null;
+    _localPhotoChecked = false;
 
     await video?.pause();
     video?.dispose();
@@ -2801,10 +3116,16 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
   }
 
   Future<void> _initVideo() async {
-    final controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.api.getFileUrl(_item.id)),
-      httpHeaders: widget.api.authHeaders,
-    );
+    final item = _item;
+    final local = await DownloadIndex.lookupMedia(widget.api.normalizedUrl, item);
+    if (!mounted || _item.id != item.id) return;
+
+    final controller = local != null
+        ? VideoPlayerController.file(local)
+        : VideoPlayerController.networkUrl(
+            Uri.parse(widget.api.getFileUrl(item.id)),
+            httpHeaders: widget.api.authHeaders,
+          );
     _videoController = controller;
     try {
       await controller.initialize();
@@ -2813,6 +3134,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
         await controller.dispose();
         return;
       }
+      await controller.setPlaybackSpeed(_playbackSpeed);
       controller.addListener(() {
         if (mounted) setState(() {});
       });
@@ -2826,8 +3148,56 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
     }
   }
 
+  void _toggleMute() {
+    final controller = _videoController;
+    if (controller == null) return;
+    setState(() {
+      _isMuted = !_isMuted;
+      controller.setVolume(_isMuted ? 0.0 : 1.0);
+    });
+  }
+
+  void _setPlaybackSpeed(double speed) {
+    _playbackSpeed = speed;
+    _videoController?.setPlaybackSpeed(speed);
+    setState(() {});
+  }
+
+  Future<void> _toggleFullscreen() async {
+    if (_isFullscreen) {
+      await _exitFullscreen();
+    } else {
+      await _enterFullscreen();
+    }
+  }
+
+  Future<void> _enterFullscreen() async {
+    if (_isFullscreen) return;
+    setState(() {
+      _isFullscreen = true;
+      _showControls = true;
+    });
+    if (Platform.isAndroid || Platform.isIOS) {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+  }
+
+  Future<void> _exitFullscreen() async {
+    if (!_isFullscreen) return;
+    setState(() => _isFullscreen = false);
+    if (Platform.isAndroid || Platform.isIOS) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[]);
+    }
+  }
+
   Future<void> _downloadOriginal() async {
     if (_downloading) return;
+    final item = _item;
     setState(() {
       _downloading = true;
       _downloadProgress = 0;
@@ -2835,18 +3205,24 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
     try {
       final file = await downloadOriginal(
         widget.api,
-        _item,
+        item,
         onProgress: (progress) {
           if (mounted) setState(() => _downloadProgress = progress);
         },
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      if (!item.isVideo && _item.id == item.id) {
+        setState(() {
+          _localPhoto = file;
+          _localPhotoChecked = true;
+        });
+      }
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(content: Text(t('viewer.downloadDone', args: {'path': file.path}))),
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(
           content: Text(t('viewer.downloadFailed', args: {'error': '$e'})),
           backgroundColor: Colors.red.shade800,
@@ -2889,7 +3265,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
           _isLoadingLive = false;
           _isPlayingLive = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
           SnackBar(content: Text(t('viewer.liveError'))),
         );
       }
@@ -2907,6 +3283,10 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
 
   @override
   void dispose() {
+    if (_isFullscreen && (Platform.isAndroid || Platform.isIOS)) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      SystemChrome.setPreferredOrientations(const <DeviceOrientation>[]);
+    }
     _videoController?.dispose();
     _liveController?.dispose();
     _pageController.dispose();
@@ -2945,7 +3325,6 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
     final item = _item;
     final extBadge = item.extension.toUpperCase();
     final resBadge = _resolutionBadge(item);
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2955,104 +3334,110 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
       ),
       builder: (ctx) {
+        final maxHeight = MediaQuery.sizeOf(ctx).height * 0.9;
         return SafeArea(
-          child: GlassSurface(
-            radius: 30,
-            blur: 34,
-            opacity: 0.84,
-            tint: const Color(0xFF0D1411),
-            margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 26),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 38,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.white24,
-                      borderRadius: BorderRadius.circular(2),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: GlassSurface(
+                  radius: 30,
+                  blur: 34,
+                  opacity: 0.84,
+                  tint: const Color(0xFF0D1411),
+                  margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 38,
+                            height: 4,
+                            margin: const EdgeInsets.only(bottom: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        Text(
+                          item.originalName,
+                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          softWrap: true,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatIphoneDate(item.timestamp),
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                          softWrap: true,
+                        ),
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (extBadge.isNotEmpty) _infoPill(extBadge),
+                            if (item.hasLive) _infoPill(t('viewer.live'), icon: Icons.motion_photos_on_rounded),
+                            if (resBadge.isNotEmpty) _infoPill(resBadge),
+                            if (item.isVideo && item.duration != null)
+                              _infoPill(_formatDuration(Duration(milliseconds: (item.duration! * 1000).round()))),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            children: [
+                              _infoRow(
+                                Icons.aspect_ratio_rounded,
+                                t('info.dimensions'),
+                                (item.width != null && item.height != null)
+                                    ? "${item.width} × ${item.height}${item.megapixels.isNotEmpty ? '  •  ${item.megapixels}' : ''}"
+                                    : t('info.unavailable'),
+                              ),
+                              const Divider(color: Colors.white12, height: 18),
+                              _infoRow(
+                                Icons.sd_storage_outlined,
+                                t('info.fileSize'),
+                                "${formatBytes(item.fileSize)} (Thumb ${formatBytes(item.thumbSize)})",
+                              ),
+                              ..._buildCameraInfoRows(item),
+                              const Divider(color: Colors.white12, height: 18),
+                              _infoRow(
+                                Icons.perm_media_outlined,
+                                t('info.mime'),
+                                item.mimetype,
+                              ),
+                              const Divider(color: Colors.white12, height: 18),
+                              InkWell(
+                                onTap: () {
+                                  Clipboard.setData(ClipboardData(text: item.hash));
+                                  Navigator.pop(ctx);
+                                  ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
+                                    SnackBar(content: Text(t('info.shaCopied'))),
+                                  );
+                                },
+                                child: _infoRow(
+                                  Icons.fingerprint_rounded,
+                                  "SHA-256",
+                                  item.hash.length > 16 ? "${item.hash.substring(0, 16)}..." : item.hash,
+                                  trailing: const Icon(Icons.copy_rounded, size: 16, color: Colors.white54),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                Text(
-                  _formatIphoneDate(item.timestamp),
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  item.originalName,
-                  style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    if (extBadge.isNotEmpty) _infoPill(extBadge),
-                    if (item.hasLive) _infoPill(t('viewer.live'), icon: Icons.motion_photos_on_rounded),
-                    if (resBadge.isNotEmpty) _infoPill(resBadge),
-                    if (item.isVideo && item.duration != null)
-                      _infoPill(_formatDuration(Duration(milliseconds: (item.duration! * 1000).round()))),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    children: [
-                      _infoRow(
-                        Icons.aspect_ratio_rounded,
-                        t('info.dimensions'),
-                        (item.width != null && item.height != null)
-                            ? "${item.width} × ${item.height}${item.megapixels.isNotEmpty ? '  •  ${item.megapixels}' : ''}"
-                            : t('info.unavailable'),
-                      ),
-                      const Divider(color: Colors.white12, height: 18),
-                      _infoRow(
-                        Icons.sd_storage_outlined,
-                        t('info.fileSize'),
-                        "${formatBytes(item.fileSize)} (Thumb ${formatBytes(item.thumbSize)})",
-                      ),
-                      ..._buildCameraInfoRows(item),
-                      const Divider(color: Colors.white12, height: 18),
-                      _infoRow(
-                        Icons.perm_media_outlined,
-                        t('info.mime'),
-                        item.mimetype,
-                      ),
-                      const Divider(color: Colors.white12, height: 18),
-                      InkWell(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: item.hash));
-                          Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(t('info.shaCopied'))),
-                          );
-                        },
-                        child: _infoRow(
-                          Icons.fingerprint_rounded,
-                          "SHA-256",
-                          item.hash.length > 16 ? "${item.hash.substring(0, 16)}..." : item.hash,
-                          trailing: const Icon(Icons.copy_rounded, size: 16, color: Colors.white54),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
+              ),
+            );
       },
     );
   }
@@ -3118,17 +3503,18 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
 
   Widget _infoRow(IconData icon, String label, String value, {Widget? trailing}) {
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(icon, size: 18, color: Colors.white60),
         const SizedBox(width: 12),
         Text(label, style: const TextStyle(color: Colors.white60, fontSize: 13)),
-        const Spacer(),
-        Flexible(
+        const SizedBox(width: 12),
+        Expanded(
           child: Text(
             value,
-            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
             textAlign: TextAlign.right,
-            overflow: TextOverflow.ellipsis,
+            softWrap: true,
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
           ),
         ),
         if (trailing != null) ...[
@@ -3145,89 +3531,103 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
       return const Scaffold(backgroundColor: Colors.black);
     }
     final item = _item;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: viewerGlassBar(),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              item.originalName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 16),
-            ),
-            Text(
-              _formatIphoneDate(item.timestamp),
-              style: const TextStyle(fontSize: 11, color: Colors.white70),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.info_outline_rounded),
-            onPressed: _showIphoneInfoSheet,
-          ),
-          IconButton(
-            tooltip: t('viewer.download'),
-            icon: _downloading
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                      value: _downloadProgress > 0 ? _downloadProgress : null,
+    return PopScope(
+      canPop: !_isFullscreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isFullscreen) _exitFullscreen();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        extendBodyBehindAppBar: !_isFullscreen,
+        appBar: _isFullscreen
+            ? null
+            : AppBar(
+                backgroundColor: Colors.transparent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                flexibleSpace: viewerGlassBar(),
+                title: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.originalName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 16),
                     ),
-                  )
-                : const Icon(Icons.download_rounded),
-            onPressed: _downloading ? null : _downloadOriginal,
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline_rounded),
-            onPressed: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: Text(t('viewer.deleteTitle')),
-                  content: Text(t('viewer.deleteBody')),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(t('action.cancel'))),
-                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(t('action.delete'))),
+                    Text(
+                      _formatIphoneDate(item.timestamp),
+                      style: const TextStyle(fontSize: 11, color: Colors.white70),
+                    ),
                   ],
                 ),
-              );
-              if (confirmed == true) {
-                await widget.onDelete(item);
-                if (!context.mounted) return;
-                await _removeCurrentItem();
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.info_outline_rounded),
+                    onPressed: _showIphoneInfoSheet,
+                  ),
+                  IconButton(
+                    tooltip: t('viewer.download'),
+                    icon: _downloading
+                        ? SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                              value: _downloadProgress > 0 ? _downloadProgress : null,
+                            ),
+                          )
+                        : const Icon(Icons.download_rounded),
+                    onPressed: _downloading ? null : _downloadOriginal,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: Text(t('viewer.deleteTitle')),
+                          content: Text(t('viewer.deleteBody')),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: Text(t('action.cancel')),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: Text(t('action.delete')),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        await widget.onDelete(item);
+                        if (!context.mounted) return;
+                        await _removeCurrentItem();
+                      }
+                    },
+                  ),
+                ],
+              ),
+        body: GestureDetector(
+          onVerticalDragEnd: (details) {
+            if ((details.primaryVelocity ?? 0) < -300) {
+              _showIphoneInfoSheet();
+            }
+          },
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: _items.length,
+            onPageChanged: _onPageChanged,
+            itemBuilder: (context, index) {
+              if (index != _index) {
+                return _buildInactivePage(_items[index]);
               }
+              return item.isVideo ? _buildVideoBody() : _buildPhotoBody();
             },
           ),
-        ],
-      ),
-      body: GestureDetector(
-        onVerticalDragEnd: (details) {
-          if ((details.primaryVelocity ?? 0) < -300) {
-            _showIphoneInfoSheet();
-          }
-        },
-        child: PageView.builder(
-          controller: _pageController,
-          itemCount: _items.length,
-          onPageChanged: _onPageChanged,
-          itemBuilder: (context, index) {
-            if (index != _index) {
-              return _buildInactivePage(_items[index]);
-            }
-            return item.isVideo ? _buildVideoBody() : _buildPhotoBody();
-          },
         ),
       ),
     );
@@ -3268,6 +3668,8 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
     await _resetPlayback();
     if (_item.isVideo) {
       await _initVideo();
+    } else {
+      _loadLocalPhoto();
     }
   }
 
@@ -3341,54 +3743,53 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
               left: 16,
               right: 16,
               bottom: MediaQuery.of(context).padding.bottom + 16,
-              child: GlassSurface(
-                radius: 18,
-                blur: 22,
-                opacity: 0.6,
-                shadow: false,
-                tint: const Color(0xFF0B1210),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    VideoProgressIndicator(
-                      vc,
-                      allowScrubbing: true,
-                      colors: VideoProgressColors(
-                        playedColor: Theme.of(context).colorScheme.primary,
-                        bufferedColor: Colors.white30,
-                        backgroundColor: Colors.white12,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          "${_formatDuration(vc.value.position)} / ${_formatDuration(vc.value.duration)}",
-                          style: const TextStyle(color: Colors.white, fontSize: 12),
-                        ),
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: Icon(
-                            _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          onPressed: () {
-                            _isMuted = !_isMuted;
-                            vc.setVolume(_isMuted ? 0.0 : 1.0);
-                            setState(() {});
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+              child: _VideoControlsBar(
+                controller: vc,
+                isMuted: _isMuted,
+                onToggleMute: _toggleMute,
+                speed: _playbackSpeed,
+                onSpeedChanged: _setPlaybackSpeed,
+                isFullscreen: _isFullscreen,
+                onToggleFullscreen: _toggleFullscreen,
               ),
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildOriginalPhoto(MediaItem item) {
+    if (!_localPhotoChecked) {
+      return MediaThumbnail(item: item, api: widget.api, fit: BoxFit.contain);
+    }
+
+    final local = _localPhoto;
+    if (local != null) {
+      return Image.file(
+        local,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => MediaThumbnail(
+          item: item,
+          api: widget.api,
+          fit: BoxFit.contain,
+        ),
+      );
+    }
+
+    return Image.network(
+      widget.api.getFileUrl(item.id),
+      headers: widget.api.authHeaders,
+      fit: BoxFit.contain,
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return const Center(child: CircularProgressIndicator());
+      },
+      // Offline: tampilkan thumbnail yang tersimpan di cache.
+      errorBuilder: (context, error, stackTrace) => MediaThumbnail(
+        item: item,
+        api: widget.api,
+        fit: BoxFit.contain,
       ),
     );
   }
@@ -3412,21 +3813,7 @@ class _MediaViewerPageState extends State<MediaViewerPage> {
                 : InteractiveViewer(
                     minScale: 0.5,
                     maxScale: 4.0,
-                    child: Image.network(
-                      widget.api.getFileUrl(item.id),
-                      headers: widget.api.authHeaders,
-                      fit: BoxFit.contain,
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return const Center(child: CircularProgressIndicator());
-                      },
-                      // Offline: tampilkan thumbnail yang tersimpan di cache.
-                      errorBuilder: (context, error, stackTrace) => MediaThumbnail(
-                        item: item,
-                        api: widget.api,
-                        fit: BoxFit.contain,
-                      ),
-                    ),
+                    child: _buildOriginalPhoto(item),
                   ),
           ),
         ),

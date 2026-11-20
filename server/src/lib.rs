@@ -126,7 +126,8 @@ pub mod routes {
       let name = field.name().unwrap_or("").to_string();
       match name.as_str() {
         "file" => {
-          pending.filename = field.file_name().unwrap_or("unknown").to_string();
+          let filename = field.file_name().unwrap_or("").trim();
+          pending.filename = if filename.is_empty() { "unknown".to_string() } else { filename.to_string() };
           pending.content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
 
           let tmp = state.storage.temp_file("upload");
@@ -191,12 +192,24 @@ pub mod routes {
     }
     let temp_src = pending.file.clone().ok_or_else(|| AppError::Internal("Missing temporary file".into()))?;
 
+    // Jangan langsung percaya Content-Type dari klien. Foto iPhone (HEIC)
+    // sering dikirim sebagai image/jpeg atau application/octet-stream.
+    pending.content_type = detect_mime_type(&pending.filename, &pending.content_type, &temp_src).await;
+
     let existing = state.db.query("select * from media where hash = $h limit 1").bind(("h", hash.clone())).await?.take::<Option<Media>>(0)?;
     if let Some(media) = existing {
       let id = media.id.map(|x| match &x.key {
         surrealdb::types::RecordIdKey::String(s) => s.clone(),
         other => format!("{:?}", other)
       }).unwrap_or_default();
+      // Baris lama mungkin menyimpan MIME yang salah (sebelum deteksi isi file).
+      if media.mimetype != pending.content_type {
+        let _ = state.db
+          .query("update media set mimetype = $mime where hash = $h")
+          .bind(("mime", pending.content_type.clone()))
+          .bind(("h", hash.clone()))
+          .await;
+      }
       return Ok(Json(UploadResponse { id, hash, deduplicated: true }));
     }
 
@@ -575,6 +588,82 @@ pub mod routes {
     Ok(res.into_response())
   }
 
+  fn mime_from_magic(head: &[u8]) -> Option<&'static str> {
+    if head.len() >= 3 && head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+      return Some("image/jpeg");
+    }
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+      return Some("image/png");
+    }
+    if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+      return Some("image/gif");
+    }
+    if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+      return Some("image/webp");
+    }
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+      return Some(match &head[8..12] {
+        b"heic" | b"heix" | b"heim" | b"heis" => "image/heic",
+        b"mif1" | b"msf1" => "image/heif",
+        b"avif" | b"avis" => "image/avif",
+        b"qt  " => "video/quicktime",
+        b"3gp4" | b"3gp5" | b"3g2a" => "video/3gpp",
+        b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"M4V " => "video/mp4",
+        _ => return None,
+      });
+    }
+    None
+  }
+
+  fn mime_from_extension(extension: &str) -> Option<&'static str> {
+    match extension {
+      "jpg" | "jpeg" | "jpe" => Some("image/jpeg"),
+      "png" => Some("image/png"),
+      "webp" => Some("image/webp"),
+      "gif" => Some("image/gif"),
+      "heic" | "heics" => Some("image/heic"),
+      "heif" => Some("image/heif"),
+      "avif" => Some("image/avif"),
+      "dng" => Some("image/x-adobe-dng"),
+      "mp4" | "m4v" => Some("video/mp4"),
+      "mov" => Some("video/quicktime"),
+      "mkv" => Some("video/x-matroska"),
+      "webm" => Some("video/webm"),
+      "3gp" => Some("video/3gpp"),
+      _ => None,
+    }
+  }
+
+  /// Menentukan MIME dari isi file asli, lalu ekstensi, lalu Content-Type klien.
+  async fn detect_mime_type(filename: &str, declared: &str, path: &std::path::Path) -> String {
+    let mut head = [0u8; 32];
+    let read = match tokio::fs::File::open(path).await {
+      Ok(mut file) => {
+        use tokio::io::AsyncReadExt;
+        file.read(&mut head).await.unwrap_or(0)
+      }
+      Err(_) => 0,
+    };
+
+    if let Some(mime) = mime_from_magic(&head[..read]) {
+      return mime.to_string();
+    }
+
+    let extension = filename
+      .rsplit_once('.')
+      .map(|(_, extension)| extension.to_ascii_lowercase())
+      .unwrap_or_default();
+    if let Some(mime) = mime_from_extension(&extension) {
+      return mime.to_string();
+    }
+
+    let declared = declared.trim();
+    if !declared.is_empty() && declared != "application/octet-stream" {
+      return declared.to_string();
+    }
+    "application/octet-stream".to_string()
+  }
+
   fn guess_extension(filename: &str, mimetype: &str) -> String {
     if let Some(pos) = filename.rfind('.') {
       let ext = &filename[pos + 1..];
@@ -873,7 +962,9 @@ pub mod metadata {
     }
 
     let bytes = std::fs::read(path).ok()?;
-    let limit = bytes.len().min(4 * 1024 * 1024);
+    // Pindai seluruh file: EXIF di HEIC kadang berada setelah blok gambar
+    // besar (>4 MB), sehingga batas lama membuat info perangkat hilang.
+    let limit = bytes.len();
     let mut index = 0usize;
     while index + 4 <= limit {
       let window = &bytes[index..index + 4];

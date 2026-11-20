@@ -90,11 +90,19 @@ class MediaItem {
   factory MediaItem.fromJson(Map<String, dynamic> json) {
     final sizes = (json['size'] as List<dynamic>?) ?? [0, 0];
     final ratio = (json['aspect_ratio'] as List<dynamic>?) ?? [null, null];
+    final hash = (json['hash'] ?? '').toString();
+    final extension = (json['extension'] ?? '').toString();
+    final rawName = (json['original_name'] ?? '').toString().trim();
+    final originalName = rawName.isNotEmpty
+        ? rawName
+        : hash.isEmpty
+            ? 'unknown'
+            : '$hash${extension.isEmpty ? '' : '.$extension'}';
     return MediaItem(
       id: (json['id'] ?? '').toString(),
-      hash: (json['hash'] ?? '').toString(),
-      originalName: (json['original_name'] ?? 'unknown').toString(),
-      extension: (json['extension'] ?? '').toString(),
+      hash: hash,
+      originalName: originalName,
+      extension: extension,
       mimetype: (json['mimetype'] ?? 'application/octet-stream').toString(),
       thumbSize: (sizes.isNotEmpty ? (sizes[0] as num?)?.toInt() : 0) ?? 0,
       fileSize: (sizes.length > 1 ? (sizes[1] as num?)?.toInt() : 0) ?? 0,
@@ -575,14 +583,17 @@ class BackupController extends ChangeNotifier {
   }
 
   Future<_UploadResult> _uploadOne(Api api, AssetEntity asset) async {
-    final file = await asset.file;
+    // `asset.file` adalah versi terkompresi/konversi (bisa kehilangan EXIF dan
+    // berubah MIME). Untuk backup kita wajib memakai file asli.
+    final file = await asset.originFile ?? await asset.file;
     if (file == null || !await file.exists()) {
       throw Exception(t('svc.fileUnavailable'));
     }
 
-    final name = asset.title ?? file.uri.pathSegments.last;
-    final mime = lookupMimeType(file.path) ??
-        (asset.type == AssetType.video ? 'video/mp4' : 'image/jpeg');
+    final title = asset.title?.trim() ?? '';
+    final fallbackName = file.uri.pathSegments.isEmpty ? 'unknown' : file.uri.pathSegments.last;
+    final name = title.isNotEmpty ? title : fallbackName;
+    final mime = await detectAssetMimeType(file, asset);
 
     final localHash = await hashFile(file);
     if (serverHashes.contains(localHash)) {
@@ -593,7 +604,7 @@ class BackupController extends ChangeNotifier {
 
     File? liveFile;
     if (asset.isLivePhoto) {
-      final candidate = await asset.fileWithSubtype;
+      final candidate = await asset.originFileWithSubtype ?? await asset.fileWithSubtype;
       if (candidate != null && candidate.path != file.path) {
         liveFile = candidate;
       }
@@ -662,4 +673,99 @@ String formatClock(int totalSeconds) {
     return "$hours:${(minutes % 60).toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}";
   }
   return "${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}";
+}
+
+/// Ekstensi yang belum dikenali paket `mime` (khas foto iPhone).
+const Map<String, String> _extraMimeTypes = {
+  'heic': 'image/heic',
+  'heif': 'image/heif',
+  'dng': 'image/x-adobe-dng',
+};
+
+String? _mimeFromName(String? name) {
+  if (name == null || name.trim().isEmpty) return null;
+  final dot = name.lastIndexOf('.');
+  if (dot >= 0 && dot < name.length - 1) {
+    final extension = name.substring(dot + 1).toLowerCase();
+    final extra = _extraMimeTypes[extension];
+    if (extra != null) return extra;
+  }
+  return lookupMimeType(name);
+}
+
+String _asciiAt(List<int> bytes, int start, int length) {
+  if (bytes.length < start + length) return '';
+  return String.fromCharCodes(bytes.sublist(start, start + length));
+}
+
+String? _mimeFromHeader(List<int> header) {
+  bool startsWith(List<int> signature) {
+    if (header.length < signature.length) return false;
+    for (var i = 0; i < signature.length; i++) {
+      if (header[i] != signature[i]) return false;
+    }
+    return true;
+  }
+
+  if (startsWith(const [0xFF, 0xD8, 0xFF])) return 'image/jpeg';
+  if (startsWith(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
+    return 'image/png';
+  }
+  if (startsWith('GIF87a'.codeUnits) || startsWith('GIF89a'.codeUnits)) {
+    return 'image/gif';
+  }
+  if (header.length >= 12 &&
+      startsWith('RIFF'.codeUnits) &&
+      _asciiAt(header, 8, 4) == 'WEBP') {
+    return 'image/webp';
+  }
+
+  if (header.length >= 12 && _asciiAt(header, 4, 4) == 'ftyp') {
+    switch (_asciiAt(header, 8, 4)) {
+      case 'heic':
+      case 'heix':
+      case 'heim':
+      case 'heis':
+        return 'image/heic';
+      case 'mif1':
+      case 'msf1':
+        return 'image/heif';
+      case 'avif':
+      case 'avis':
+        return 'image/avif';
+      case 'qt  ':
+        return 'video/quicktime';
+      case '3gp4':
+      case '3gp5':
+      case '3g2a':
+        return 'video/3gpp';
+      case 'isom':
+      case 'iso2':
+      case 'mp41':
+      case 'mp42':
+      case 'avc1':
+      case 'M4V ':
+        return 'video/mp4';
+    }
+  }
+
+  return null;
+}
+
+/// Mendeteksi MIME dari **file asli** yang akan diunggah (bukan thumbnail).
+///
+/// Header file diperiksa lebih dulu karena iOS kadang mengekspor HEIC sebagai
+/// JPEG (atau sebaliknya) sementara nama filenya tidak berubah.
+Future<String> detectAssetMimeType(File file, AssetEntity asset) async {
+  try {
+    final header = await file.openRead(0, 32).first;
+    final mime = _mimeFromHeader(header);
+    if (mime != null) return mime;
+  } catch (_) {
+    // File tidak terbaca: lanjut ke deteksi berbasis nama.
+  }
+
+  return _mimeFromName(asset.title) ??
+      _mimeFromName(file.path) ??
+      (asset.type == AssetType.video ? 'video/mp4' : 'image/jpeg');
 }

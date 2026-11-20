@@ -15,6 +15,8 @@
 
   "media.empty.title": "Belum ada media di server",
   "media.empty.subtitle": "Buka tab Lokal untuk memilih foto/video, atau tekan tombol Play di kanan atas untuk mulai backup.",
+  "media.emptyFiltered.title": "Tidak ada media yang cocok",
+  "media.emptyFiltered.subtitle": "Coba ubah kata kunci, atau tampilkan kembali semua foto dan video.",
   "media.error.title": "Gagal memuat media",
   "media.count": "{count} media di server",
   "media.countShort": "{count} media",
@@ -92,6 +94,11 @@
   "viewer.download": "Unduh file asli",
   "viewer.downloadDone": "Tersimpan di {path}",
   "viewer.downloadFailed": "Gagal mengunduh: {error}",
+  "viewer.mute": "Bisukan",
+  "viewer.unmute": "Nyalakan suara",
+  "viewer.speed": "Kecepatan putar",
+  "viewer.fullscreen": "Layar penuh",
+  "viewer.exitFullscreen": "Keluar layar penuh",
 
   "server.reconcile": "Periksa File Yatim",
   "server.reconcileSubtitle": "Deteksi file di disk yang tidak punya data di database",
@@ -108,6 +115,7 @@
 
   "server.clearThumbs": "Bersihkan Cache Thumbnail",
   "server.clearThumbsSubtitle": "Hapus thumbnail offline yang tersimpan di perangkat",
+  "server.cacheSize": "Ukuran cache: {size}",
   "server.clearThumbsDone": "Cache thumbnail dibersihkan",
 
   "viewer.deleteTitle": "Hapus Media?",

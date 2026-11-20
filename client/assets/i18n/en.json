@@ -15,6 +15,8 @@
 
   "media.empty.title": "No media on the server yet",
   "media.empty.subtitle": "Open the Local tab to pick photos/videos, or tap Play in the top right to start a backup.",
+  "media.emptyFiltered.title": "No matching media",
+  "media.emptyFiltered.subtitle": "Try a different keyword, or show all photos and videos again.",
   "media.error.title": "Failed to load media",
   "media.count": "{count} media on the server",
   "media.countShort": "{count} media",
@@ -92,6 +94,11 @@
   "viewer.download": "Download original",
   "viewer.downloadDone": "Saved to {path}",
   "viewer.downloadFailed": "Download failed: {error}",
+  "viewer.mute": "Mute",
+  "viewer.unmute": "Unmute",
+  "viewer.speed": "Playback speed",
+  "viewer.fullscreen": "Full screen",
+  "viewer.exitFullscreen": "Exit full screen",
 
   "server.reconcile": "Find Orphan Files",
   "server.reconcileSubtitle": "Detect files on disk that have no database record",
@@ -108,6 +115,7 @@
 
   "server.clearThumbs": "Clear Thumbnail Cache",
   "server.clearThumbsSubtitle": "Remove offline thumbnails stored on this device",
+  "server.cacheSize": "Cache size: {size}",
   "server.clearThumbsDone": "Thumbnail cache cleared",
 
   "viewer.deleteTitle": "Delete Media?",

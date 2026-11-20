@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart' show GlobalCupertinoLocalizations;
 import 'package:flutter/services.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWidgetsLocalizations;
+import 'package:material_ui/material_ui.dart';
 import 'package:syncfony/app_lock.dart';
 import 'package:syncfony/background.dart';
 import 'package:syncfony/l10n.dart';
@@ -120,10 +121,16 @@ class _AppState extends State<App> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(serverUrlPrefsKey);
     await prefs.remove(serverTokenPrefsKey);
+    // Putuskan server = logout: jangan biarkan kunci aplikasi/biometrik tetap
+    // aktif untuk sesi berikutnya.
+    await AppLock.setEnabled(false);
     if (!mounted) return;
+    appLockEnabled.value = false;
     setState(() {
       _serverUrl = null;
       _token = null;
+      _lockEnabled = false;
+      _unlocked = true;
     });
   }
 
@@ -243,7 +250,7 @@ class SyncfonyState extends State<Syncfony> {
               : msg.contains("errno = 61")
                   ? t('error.offline')
                   : t('error.connect', args: {'error': msg});
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)..clearSnackBars()..showSnackBar(
         SnackBar(content: Text(err), backgroundColor: Colors.red.shade800),
       );
     } finally {
