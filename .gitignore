@@ -4,3 +4,4 @@ data/
 *.db
 .rules
 .DS_Store
+output/

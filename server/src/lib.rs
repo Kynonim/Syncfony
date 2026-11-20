@@ -264,8 +264,8 @@ pub mod routes {
       size: [media_thumb.size, pending.size],
       extension,
       aspect_ratio: [
-        if media_thumb.width > 0 { Some(media_thumb.width) } else { None },
-        if media_thumb.height > 0 { Some(media_thumb.height) } else { None }
+        Some(if media_thumb.width > 0 { media_thumb.width } else { 0 }),
+        Some(if media_thumb.height > 0 { media_thumb.height } else { 0 })
       ],
       storage_path: media_path,
       has_thumb,
@@ -817,7 +817,7 @@ pub mod storage {
             image::load_from_memory(&data).map_err(|e| anyhow::anyhow!("Decode: {}", e))
           }?;
           let (width, height) = (img.width() as i32, img.height() as i32);
-          let thumb = img.thumbnail(512, 512);
+          let thumb = image::DynamicImage::ImageRgb8(img.thumbnail(512, 512).to_rgb8());
           if let Some(parent) = thumb_absolute.parent() {
             std::fs::create_dir_all(parent)?;
           }
@@ -1161,7 +1161,10 @@ pub mod models {
         original_name: v.original_name,
         extension: v.extension,
         mimetype: v.mimetype,
-        aspect_ratio: v.aspect_ratio,
+        aspect_ratio: [
+          v.aspect_ratio[0].filter(|value| *value > 0),
+          v.aspect_ratio[1].filter(|value| *value > 0),
+        ],
         size: v.size,
         has_thumb: v.has_thumb,
         has_live: v.has_live.unwrap_or(false),

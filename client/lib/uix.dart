@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoPageTransitionsBuilder;
 import 'package:material_ui/material_ui.dart';
@@ -38,6 +39,12 @@ const double maxGlassBlurScale = 2.0;
 const String glassBlurPrefsKey = 'syncfony_glass_blur';
 const String gridColumnsPrefsKey = 'syncfony_grid_columns';
 const String accentPrefsKey = 'syncfony_accent';
+const String gooeyEffectPrefsKey = 'syncfony_gooey_effect';
+const String gooeyIntensityPrefsKey = 'syncfony_gooey_intensity';
+
+/// Efek gooey/metaball pada app bar dan bottom bar.
+final ValueNotifier<bool> gooeyEffectEnabled = ValueNotifier(true);
+final ValueNotifier<double> gooeyIntensity = ValueNotifier(0.65);
 
 class AccentOption {
   final String id;
@@ -272,6 +279,318 @@ class GlassSurface extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Surface kaca dengan bentuk yang beranimasi lembut seperti tetesan air.
+///
+/// Saat efek gooey aktif, silhouette bar + beberapa blob digambar di belakang
+/// kaca, lalu di-blur dan di-threshold sehingga elemen-elemennya menyatu /
+/// terbelah seperti metaball.
+class LiquidGlassBar extends StatefulWidget {
+  final Widget child;
+  final double radius;
+  final BorderRadius? borderRadius;
+  final double blur;
+  final double opacity;
+  final Color? tint;
+  final EdgeInsets padding;
+  final EdgeInsets? margin;
+  final bool shadow;
+  final bool showBorder;
+  final int? activeIndex;
+  final int? itemCount;
+
+  const LiquidGlassBar({
+    super.key,
+    required this.child,
+    this.radius = 30,
+    this.borderRadius,
+    this.blur = 30,
+    this.opacity = 0.58,
+    this.tint,
+    this.padding = EdgeInsets.zero,
+    this.margin,
+    this.shadow = true,
+    this.showBorder = true,
+    this.activeIndex,
+    this.itemCount,
+  });
+
+  @override
+  State<LiquidGlassBar> createState() => _LiquidGlassBarState();
+}
+
+class _LiquidGlassBarState extends State<LiquidGlassBar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _indexController = AnimationController.unbounded(
+    vsync: this,
+    duration: const Duration(milliseconds: 460),
+    value: (widget.activeIndex ?? 0).toDouble(),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    gooeyEffectEnabled.addListener(_syncIndex);
+  }
+
+  @override
+  void didUpdateWidget(covariant LiquidGlassBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.activeIndex != oldWidget.activeIndex && widget.activeIndex != null) {
+      if (gooeyEffectEnabled.value) {
+        _indexController.animateTo(
+          widget.activeIndex!.toDouble(),
+          duration: const Duration(milliseconds: 460),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _indexController.value = widget.activeIndex!.toDouble();
+      }
+    }
+  }
+
+  void _syncIndex() {
+    if (!mounted) return;
+    if (!gooeyEffectEnabled.value) {
+      _indexController.stop();
+      if (widget.activeIndex != null) {
+        _indexController.value = widget.activeIndex!.toDouble();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    gooeyEffectEnabled.removeListener(_syncIndex);
+    _indexController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
+    final base = widget.tint ?? (isDark ? const Color(0xFF0D1014) : Colors.white);
+    final fill = base.withValues(alpha: widget.opacity);
+    final sigma = widget.blur * glassBlurScale;
+
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        _indexController,
+        gooeyEffectEnabled,
+        gooeyIntensity,
+      ]),
+      builder: (context, child) {
+        final enabled = gooeyEffectEnabled.value;
+        final intensity = gooeyIntensity.value.clamp(0.0, 1.0);
+        final radius = widget.borderRadius ?? BorderRadius.circular(widget.radius);
+
+        final surface = DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color.alphaBlend(Colors.white.withValues(alpha: isDark ? 0.16 : 0.60), fill),
+                fill,
+                Color.alphaBlend(Colors.black.withValues(alpha: isDark ? 0.20 : 0.035), fill),
+              ],
+              stops: const [0.0, 0.45, 1.0],
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(-0.65, -0.7),
+                        radius: 1.05,
+                        colors: [
+                          Colors.white.withValues(alpha: isDark ? 0.16 : 0.34),
+                          Colors.white.withValues(alpha: 0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: const Alignment(0.7, 0.6),
+                        radius: 0.72,
+                        colors: [
+                          scheme.primary.withValues(alpha: isDark ? 0.16 : 0.12),
+                          scheme.primary.withValues(alpha: 0),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (widget.showBorder)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: radius,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: isDark ? 0.18 : 0.75),
+                          width: 0.9,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              Padding(padding: widget.padding, child: child),
+            ],
+          ),
+        );
+
+        final gooey = enabled && intensity > 0.01
+            ? _buildGooeyLayer(context, intensity, scheme.primary)
+            : null;
+
+        return Container(
+          margin: widget.margin,
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            boxShadow: widget.shadow
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: isDark ? 0.34 : 0.10),
+                      blurRadius: 34,
+                      spreadRadius: -5,
+                      offset: const Offset(0, 16),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              ?gooey,
+              ClipRRect(
+                borderRadius: radius,
+                child: sigma <= 0.01
+                    ? surface
+                    : BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                        child: surface,
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+
+  Widget _buildGooeyLayer(BuildContext context, double intensity, Color color) {
+    const inset = 36.0;
+    final target = (widget.activeIndex ?? 0).toDouble();
+    final transition = widget.activeIndex == null
+        ? 0.0
+        : (target - _indexController.value).abs().clamp(0.0, 1.0);
+    final painter = _GooeyPainter(
+      inset: inset,
+      radius: widget.radius,
+      color: color,
+      activeIndex: widget.activeIndex == null ? null : _indexController.value,
+      itemCount: widget.itemCount,
+      activeTransition: transition,
+      intensity: intensity,
+    );
+
+    return Positioned(
+      left: -inset,
+      top: -inset,
+      right: -inset,
+      bottom: -inset,
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: (0.70 * intensity).clamp(0.0, 0.8),
+          child: ColorFiltered(
+            colorFilter: _gooeyAlphaFilter,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(
+                sigmaX: 8 + 7 * intensity,
+                sigmaY: 8 + 7 * intensity,
+              ),
+              child: CustomPaint(painter: painter),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+const ColorFilter _gooeyAlphaFilter = ColorFilter.matrix(<double>[
+  1, 0, 0, 0, 0,
+  0, 1, 0, 0, 0,
+  0, 0, 1, 0, 0,
+  0, 0, 0, 20, -2400,
+]);
+
+class _GooeyPainter extends CustomPainter {
+  final double inset;
+  final double radius;
+  final Color color;
+  final double? activeIndex;
+  final int? itemCount;
+  final double activeTransition;
+  final double intensity;
+
+  const _GooeyPainter({
+    required this.inset,
+    required this.radius,
+    required this.color,
+    required this.activeIndex,
+    required this.itemCount,
+    required this.activeTransition,
+    required this.intensity,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+
+    final paint = Paint()..color = color;
+    final barRect = Rect.fromLTWH(
+      inset,
+      inset,
+      math.max(0, size.width - inset * 2),
+      math.max(0, size.height - inset * 2),
+    );
+    if (barRect.isEmpty) return;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(barRect, Radius.circular(radius)),
+      paint,
+    );
+
+    if (activeIndex != null && itemCount != null && itemCount! > 0) {
+      final x = barRect.left + barRect.width * ((activeIndex! + 0.5) / itemCount!);
+      final drop = activeTransition.clamp(0.0, 1.0);
+      canvas.drawCircle(
+        Offset(x, barRect.bottom + barRect.height * 0.30 * drop),
+        barRect.height * (0.30 + 0.08 * intensity) * (1 - 0.18 * drop),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GooeyPainter oldDelegate) => true;
 }
 
 /// Kartu kaca siap pakai (pengganti `Card`).

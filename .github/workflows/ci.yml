@@ -39,7 +39,10 @@ jobs:
 
       - name: Test
         working-directory: server
-        run: cargo test -- --nocapture
+        env:
+          # SurrealKV memakai stack cukup dalam saat inisialisasi/drop di debug.
+          RUST_MIN_STACK: "33554432"
+        run: cargo test -- --nocapture --test-threads=1
 
   client:
     name: Client (Flutter)
@@ -58,7 +61,7 @@ jobs:
       - name: Install dependencies
         working-directory: client
         run: flutter pub get
-
+ 
       - name: Analyze
         working-directory: client
         run: flutter analyze

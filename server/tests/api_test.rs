@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
@@ -7,6 +8,8 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use syncfony::{database, routes, storage};
+
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// PNG 1x1 transparan yang valid, dipakai sebagai payload upload.
 const PNG_1X1: &str = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489\
@@ -17,11 +20,18 @@ fn png_bytes() -> Vec<u8> {
 }
 
 async fn test_router(token: Option<&str>) -> axum::Router {
-  let unique = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .expect("clock")
-    .as_nanos();
-  let root = std::env::temp_dir().join(format!("syncfony-test-{unique}"));
+  // Kombinasi pid + timestamp + counter memastikan setiap test punya database
+  // sendiri, termasuk saat test berjalan paralel di CI.
+  let unique = format!(
+    "syncfony-test-{}-{}-{}",
+    std::process::id(),
+    SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("clock")
+      .as_nanos(),
+    TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed),
+  );
+  let root = std::env::temp_dir().join(unique);
   std::fs::create_dir_all(&root).expect("temp dir");
 
   let db_path = root.join("db");

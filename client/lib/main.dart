@@ -27,6 +27,10 @@ Future<void> main() async {
       .clamp(minGlassBlurScale, maxGlassBlurScale)
       .toDouble();
   accentColor.value = accentById(prefs.getString(accentPrefsKey)).seed;
+  gooeyEffectEnabled.value = prefs.getBool(gooeyEffectPrefsKey) ?? true;
+  gooeyIntensity.value = (prefs.getDouble(gooeyIntensityPrefsKey) ?? 0.65)
+      .clamp(0.0, 1.0)
+      .toDouble();
   await l10n.load();
 
   // Daftarkan tugas backup periodik jika sebelumnya diaktifkan di Settings.

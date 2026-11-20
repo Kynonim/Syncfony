@@ -811,7 +811,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     return Positioned(
       left: 0,
       right: 0,
-      top: MediaQuery.of(context).padding.top + 74,
+      top: MediaQuery.of(context).padding.top + 128,
       child: IgnorePointer(
         child: Center(
           child: GlassSurface(
@@ -903,7 +903,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   }
 
   Widget _buildMediaTab() {
-    final topPad = MediaQuery.of(context).padding.top + 80;
+    final topPad = MediaQuery.of(context).padding.top + 116;
     final filtered = searchQuery.isNotEmpty || mediaKind != 'all';
     if (isLoadingMedia && mediaItems.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -1079,7 +1079,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   }
 
   Widget _buildLocalTab() {
-    final topPad = MediaQuery.of(context).padding.top + 80;
+    final topPad = MediaQuery.of(context).padding.top + 116;
 
     if (!backup.permissionGranted) {
       return _emptyStateCard(
@@ -1151,7 +1151,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
           Positioned(
             left: 16,
             right: 16,
-            bottom: MediaQuery.of(context).padding.bottom + 96,
+            bottom: MediaQuery.of(context).padding.bottom + 112,
             child: GlassSurface(
               radius: 28,
               blur: 30,
@@ -1185,7 +1185,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   }
 
   Widget _buildBackupTab() {
-    final topPad = MediaQuery.of(context).padding.top + 80;
+    final topPad = MediaQuery.of(context).padding.top + 116;
     return RefreshIndicator(
       onRefresh: () async {
         await backup.scan();
@@ -1385,7 +1385,7 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
   }
 
   Widget _buildSettingsTab() {
-    final topPad = MediaQuery.of(context).padding.top + 80;
+    final topPad = MediaQuery.of(context).padding.top + 116;
     return ListView(
       controller: settingsScroll,
       padding: EdgeInsets.only(top: topPad, left: 20, right: 20, bottom: 110),
@@ -1517,6 +1517,80 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                 Text(
                   glassBlurScale <= 0.01 ? t('appearance.blurOff') : t('appearance.blurHint'),
                   style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const Divider(height: 24),
+                ValueListenableBuilder<bool>(
+                  valueListenable: gooeyEffectEnabled,
+                  builder: (context, enabled, _) {
+                    final scheme = Theme.of(context).colorScheme;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.water_drop_outlined, size: 18, color: scheme.primary),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(t('appearance.gooey'), style: Theme.of(context).textTheme.bodyMedium),
+                                  Text(
+                                    t('appearance.gooeySubtitle'),
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: enabled,
+                              onChanged: (value) async {
+                                gooeyEffectEnabled.value = value;
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool(gooeyEffectPrefsKey, value);
+                              },
+                            ),
+                          ],
+                        ),
+                        ValueListenableBuilder<double>(
+                          valueListenable: gooeyIntensity,
+                          builder: (context, intensity, _) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      t('appearance.gooeyIntensity'),
+                                      style: Theme.of(context).textTheme.bodyMedium,
+                                    ),
+                                    Text(
+                                      '${(intensity * 100).round()}%',
+                                      style: Theme.of(context).textTheme.labelLarge,
+                                    ),
+                                  ],
+                                ),
+                                Slider(
+                                  value: intensity,
+                                  min: 0,
+                                  max: 1,
+                                  divisions: 10,
+                                  onChanged: enabled
+                                      ? (value) async {
+                                          gooeyIntensity.value = value;
+                                          final prefs = await SharedPreferences.getInstance();
+                                          await prefs.setDouble(gooeyIntensityPrefsKey, value);
+                                        }
+                                      : null,
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 12),
                 ValueListenableBuilder<int>(
@@ -1847,15 +1921,17 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
-      bottom: visible ? (MediaQuery.of(context).padding.bottom + 20.0) : -120.0,
+      bottom: visible ? (MediaQuery.of(context).padding.bottom + 16.0) : -150.0,
       left: 0,
       right: 0,
       child: Center(
-        child: GlassSurface(
-          radius: 34,
-          blur: 30,
-          opacity: 0.55,
-          padding: const EdgeInsets.all(6),
+        child: LiquidGlassBar(
+          radius: 40,
+          blur: 34,
+          opacity: 0.60,
+          padding: const EdgeInsets.all(8),
+          activeIndex: currentTab,
+          itemCount: 4,
           child: Row(
             mainAxisSize: .min,
             children: [
@@ -1892,9 +1968,9 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 280),
         curve: Curves.easeOutCubic,
-        padding: EdgeInsets.symmetric(horizontal: active ? 16 : 13, vertical: 11),
+        padding: EdgeInsets.symmetric(horizontal: active ? 18 : 15, vertical: 13),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: BorderRadius.circular(32),
           gradient: active
               ? LinearGradient(
                   begin: Alignment.topLeft,
@@ -1909,8 +1985,8 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
               ? [
                   BoxShadow(
                     color: scheme.primary.withValues(alpha: 0.35),
-                    blurRadius: 18,
-                    offset: const Offset(0, 7),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
                   ),
                 ]
               : null,
@@ -1918,15 +1994,15 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
         child: Row(
           mainAxisSize: .min,
           children: [
-            Icon(icon, size: 20, color: active ? scheme.onPrimary : scheme.onSurfaceVariant),
+            Icon(icon, size: 22, color: active ? scheme.onPrimary : scheme.onSurfaceVariant),
             if (active) ...[
-              const SizedBox(width: 7),
+              const SizedBox(width: 8),
               Text(
                 label,
                 style: TextStyle(
                   color: scheme.onPrimary,
                   fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontSize: 15,
                 ),
               ),
             ],
@@ -1982,51 +2058,44 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
             : t('nav.backup'))
         : "${t(tabKeys[currentTab % tabKeys.length])} • ${shortHost(api.normalizedUrl)}";
     final wide = MediaQuery.sizeOf(context).width >= 700;
-    final progressSize = wide ? 64.0 : 52.0;
+    final progressSize = wide ? 68.0 : 60.0;
 
-    return AnimatedPositioned(
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-      top: visible ? (MediaQuery.of(context).padding.top + 6.0) : (MediaQuery.of(context).padding.top - 150.0),
-      left: 14,
-      right: 14,
-      child: GlassSurface(
-        radius: 26,
-        blur: 30,
-        opacity: 0.58,
-        padding: const EdgeInsets.fromLTRB(10, 9, 9, 9),
+    final leftChild = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: uploading ? () => _selectTab(2) : null,
+      child: SizedBox.expand(
         child: Row(
           children: [
             if (uploading)
               _backupProgressCircle(progressSize)
             else
               ClipRRect(
-                borderRadius: BorderRadius.circular(13),
-                child: const AppLogo(size: 38),
+                borderRadius: BorderRadius.circular(16),
+                child: const AppLogo(size: 46),
               ),
-            const SizedBox(width: 11),
+            const SizedBox(width: 13),
             Expanded(
               child: Column(
-                crossAxisAlignment: .start,
-                mainAxisSize: .min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: uploading ? 14.5 : 16.5,
+                      fontSize: uploading ? 16 : 18,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: -0.35,
+                      letterSpacing: -0.4,
                     ),
                   ),
-                  const SizedBox(height: 1),
+                  const SizedBox(height: 2),
                   Text(
                     subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 11.5,
+                      fontSize: 12,
                       fontWeight: FontWeight.w500,
                       color: scheme.onSurfaceVariant,
                     ),
@@ -2034,16 +2103,56 @@ class SyncfonyGalleryState extends State<SyncfonyGallery> {
                 ],
               ),
             ),
-            GlassIconButton(
-              icon: uploading ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              size: 40,
-              iconSize: 20,
-              active: uploading,
-              onPressed: _toggleBackup,
-              tooltip: uploading ? t('action.pauseBackup') : t('action.startBackup'),
-            ),
           ],
         ),
+      ),
+    );
+
+    final rightChild = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleBackup,
+      child: SizedBox.expand(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                uploading ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: 24,
+                color: scheme.onSurface,
+              ),
+              if (uploading) ...[
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    t('action.pause'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      top: visible ? (MediaQuery.of(context).padding.top + 8.0) : (MediaQuery.of(context).padding.top - 190.0),
+      left: 16,
+      right: 16,
+      child: SplitGlassBar(
+        split: uploading,
+        leftChild: leftChild,
+        rightChild: rightChild,
+        height: 92,
+        radius: 34,
+        blur: 34,
+        opacity: 0.62,
       ),
     );
   }
@@ -2479,6 +2588,190 @@ class _VideoControlsBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Kapsul kaca berisi dua grup tombol yang bisa terbelah menjadi dua kapsul.
+class SplitGlassBar extends StatefulWidget {
+  final bool split;
+  final Widget leftChild;
+  final Widget rightChild;
+  final double height;
+  final double radius;
+  final double blur;
+  final double opacity;
+  final double mergedRightWidth;
+  final double splitRightWidth;
+  final double gap;
+  final Duration duration;
+
+  const SplitGlassBar({
+    super.key,
+    required this.split,
+    required this.leftChild,
+    required this.rightChild,
+    this.height = 92,
+    this.radius = 34,
+    this.blur = 34,
+    this.opacity = 0.62,
+    this.mergedRightWidth = 64,
+    this.splitRightWidth = 132,
+    this.gap = 14,
+    this.duration = const Duration(milliseconds: 420),
+  });
+
+  @override
+  State<SplitGlassBar> createState() => _SplitGlassBarState();
+}
+
+class _SplitGlassBarState extends State<SplitGlassBar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: widget.duration,
+    value: widget.split ? 1 : 0,
+  );
+  late final Animation<double> _curve = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeInOutCubic,
+  );
+
+  @override
+  void didUpdateWidget(covariant SplitGlassBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.split != oldWidget.split) {
+      if (gooeyEffectEnabled.value) {
+        _controller.animateTo(widget.split ? 1 : 0);
+      } else {
+        _controller.value = widget.split ? 1 : 0;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _curve,
+      builder: (context, _) {
+        final t = _curve.value;
+        final rightWidth = widget.mergedRightWidth +
+            (widget.splitRightWidth - widget.mergedRightWidth) * t;
+        final gap = widget.gap * t;
+        final facing = widget.radius * t;
+
+        final leftRadius = BorderRadius.only(
+          topLeft: Radius.circular(widget.radius),
+          bottomLeft: Radius.circular(widget.radius),
+          topRight: Radius.circular(facing),
+          bottomRight: Radius.circular(facing),
+        );
+        final rightRadius = BorderRadius.only(
+          topLeft: Radius.circular(facing),
+          bottomLeft: Radius.circular(facing),
+          topRight: Radius.circular(widget.radius),
+          bottomRight: Radius.circular(widget.radius),
+        );
+
+        // Saat menyatu, pakai satu kapsul agar tidak ada garis sambungan.
+        if (t <= 0.001) {
+          return SizedBox(
+            height: widget.height,
+            child: LiquidGlassBar(
+              radius: widget.radius,
+              blur: widget.blur,
+              opacity: widget.opacity,
+              padding: EdgeInsets.zero,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
+                      child: widget.leftChild,
+                    ),
+                  ),
+                  SizedBox(width: widget.mergedRightWidth, child: widget.rightChild),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final leftWidth = (constraints.maxWidth - rightWidth - gap)
+                .clamp(0.0, double.infinity);
+            final bridge = (1 - (t * 2 - 1).abs()).clamp(0.0, 1.0);
+
+            return SizedBox(
+              width: double.infinity,
+              height: widget.height,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  if (bridge > 0.01)
+                    Positioned(
+                      left: leftWidth - 14,
+                      width: gap + 28,
+                      top: widget.height * 0.26,
+                      height: widget.height * 0.48,
+                      child: IgnorePointer(
+                        child: Opacity(
+                          opacity: 0.34 * bridge,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary,
+                              borderRadius: BorderRadius.circular(widget.height * 0.24),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: leftWidth,
+                    child: LiquidGlassBar(
+                      borderRadius: leftRadius,
+                      radius: widget.radius,
+                      blur: widget.blur,
+                      opacity: widget.opacity,
+                      showBorder: t > 0.02,
+                      shadow: t > 0.02,
+                      padding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
+                      child: widget.leftChild,
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: rightWidth,
+                    child: LiquidGlassBar(
+                      borderRadius: rightRadius,
+                      radius: widget.radius,
+                      blur: widget.blur,
+                      opacity: widget.opacity,
+                      showBorder: t > 0.02,
+                      shadow: t > 0.02,
+                      padding: EdgeInsets.zero,
+                      child: widget.rightChild,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

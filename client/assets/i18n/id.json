@@ -12,6 +12,7 @@
   "action.cancel": "Batal",
   "action.delete": "Hapus",
   "action.start": "Mulai",
+  "action.pause": "Jeda",
 
   "media.empty.title": "Belum ada media di server",
   "media.empty.subtitle": "Buka tab Lokal untuk memilih foto/video, atau tekan tombol Play di kanan atas untuk mulai backup.",
@@ -54,6 +55,9 @@
   "appearance.blur": "Intensitas blur kaca",
   "appearance.blurOff": "Blur mati (hemat GPU). Permukaan tetap memakai tint kaca.",
   "appearance.blurHint": "Geser ke 0% untuk mematikan blur bila terasa berat.",
+  "appearance.gooey": "Efek Gooey",
+  "appearance.gooeySubtitle": "Efek metaball pada navigasi dan elemen mengambang. Matikan untuk menghemat GPU.",
+  "appearance.gooeyIntensity": "Intensitas gooey",
   "appearance.columns": "Kolom galeri",
   "appearance.columnsValue": "{count} kolom",
   "appearance.pinchHint": "Tips: cubit dua jari pada galeri untuk memperbesar/memperkecil foto.",

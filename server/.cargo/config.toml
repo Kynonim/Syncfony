@@ -1,0 +1,4 @@
+[env]
+# SurrealKV membutuhkan stack lebih besar saat inisialisasi/drop di debug,
+# terutama ketika test dijalankan lewat harness Rust.
+RUST_MIN_STACK = "33554432"

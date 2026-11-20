@@ -12,6 +12,7 @@
   "action.cancel": "Cancel",
   "action.delete": "Delete",
   "action.start": "Start",
+  "action.pause": "Pause",
 
   "media.empty.title": "No media on the server yet",
   "media.empty.subtitle": "Open the Local tab to pick photos/videos, or tap Play in the top right to start a backup.",
@@ -54,6 +55,9 @@
   "appearance.blur": "Glass blur intensity",
   "appearance.blurOff": "Blur off (saves GPU). Surfaces keep the glass tint.",
   "appearance.blurHint": "Drag to 0% to disable blur if it feels heavy.",
+  "appearance.gooey": "Gooey Effect",
+  "appearance.gooeySubtitle": "Metaball effect on navigation and floating elements. Disable to save GPU.",
+  "appearance.gooeyIntensity": "Gooey intensity",
   "appearance.columns": "Gallery columns",
   "appearance.columnsValue": "{count} columns",
   "appearance.pinchHint": "Tip: pinch the gallery with two fingers to resize the photos.",
